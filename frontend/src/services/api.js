@@ -78,6 +78,12 @@ export const api = {
   getEmployeeLocations: (userId, date) => request(`/admin/employee/${userId}/locations/${date}`),
   getEmployeeActivities:(userId, date) => request(`/admin/employee/${userId}/activities/${date}`),
 
+  // ── Settings — routes/settings.py ────────────────────────────────────────
+  // getLoginDeadline: consumed by MapScreen.js on mount → week box colour logic
+  // updateLoginDeadline: consumed by AdminDashboardScreen.js → Settings tab
+  getLoginDeadline:    ()         => request('/settings/login-deadline'),
+  updateLoginDeadline: (deadline) => request('/settings/admin/login-deadline', { method: 'PUT', body: JSON.stringify({ login_deadline: deadline }) }),
+
   // ── Saved Locations — routes/saved_locations.py ───────────────────────────
   // Consumed by MapScreen.js (mark / load pins; idle suppression uses the list too)
   saveLocation:        (data) => request('/saved-locations',        { method: 'POST',   body: JSON.stringify(data) }),

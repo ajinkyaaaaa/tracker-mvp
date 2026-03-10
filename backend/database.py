@@ -130,6 +130,14 @@ def init_db():
             UNIQUE(user_id, date)
         );
 
+        -- company_settings: global key-value config controlled by the admin
+        -- login_deadline (HH:MM) is fetched by MapScreen to colour the week login boxes
+        CREATE TABLE IF NOT EXISTS company_settings (
+            key   TEXT PRIMARY KEY,
+            value TEXT NOT NULL
+        );
+        INSERT OR IGNORE INTO company_settings (key, value) VALUES ('login_deadline', '09:00');
+
     """)
     conn.commit()
 

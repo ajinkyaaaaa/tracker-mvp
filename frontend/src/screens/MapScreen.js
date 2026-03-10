@@ -46,7 +46,7 @@ const GRAY2 = '#C7C7CC';
 const GRAY3 = '#E5E5EA';
 const WHITE = '#FFFFFF';
 
-const LOGIN_DEADLINE_HOUR = 9; // 09:00 = on-time threshold for the green/yellow boxes
+const LOGIN_DEADLINE_DEFAULT = '09:00'; // fallback until the server value is fetched
 const WEEK_LABELS = ['S', 'M', 'T', 'W', 'T', 'F', 'S']; // Sun → Sat
 
 // Returns 7 ISO date strings for the current Sun→Sat week
@@ -121,6 +121,7 @@ export default function MapScreen({ navigation }) {
   const [pendingCount,     setPendingCount]     = useState(0);
   const [showLoginCal,     setShowLoginCal]     = useState(false);
   const [weekLoginMap,     setWeekLoginMap]     = useState({});
+  const [loginDeadline,    setLoginDeadline]    = useState(LOGIN_DEADLINE_DEFAULT); // "HH:MM"
 
   const mapRef   = useRef(null);
   const appState = useRef(AppState.currentState);
@@ -160,6 +161,7 @@ export default function MapScreen({ navigation }) {
     loadSavedLocations();
     loadPendingCount();
     loadWeekLogins();
+    loadLoginDeadline();
     loadMutedLocations();
     // Record current login session locally for sync and login history calendar
     if (loginTime) insertLoginSession(loginTime, loginTime.slice(0, 10)).catch(() => {});
@@ -213,7 +215,15 @@ export default function MapScreen({ navigation }) {
     } catch {}
   }
 
-  // Builds date→sessions map for current Sat→Fri week → login widget status boxes
+  // Fetches admin-controlled login deadline from server → used for week box colour logic
+  async function loadLoginDeadline() {
+    try {
+      const { login_deadline } = await api.getLoginDeadline();
+      if (login_deadline) setLoginDeadline(login_deadline);
+    } catch {}
+  }
+
+  // Builds date→sessions map for current Sun→Sat week → login widget status boxes
   async function loadWeekLogins() {
     try {
       const dates = getWeekDates();
@@ -513,12 +523,14 @@ export default function MapScreen({ navigation }) {
                 let textColor = GRAY2;
 
                 if (first) {
-                  const d    = new Date(first.login_time.includes('T') ? first.login_time : first.login_time.replace(' ', 'T') + 'Z');
-                  const mins = d.getHours() * 60 + d.getMinutes();
-                  if (mins <= LOGIN_DEADLINE_HOUR * 60) {
-                    bgColor = '#34C759'; textColor = WHITE;
+                  const d = new Date(first.login_time.includes('T') ? first.login_time : first.login_time.replace(' ', 'T') + 'Z');
+                  const loginMins    = d.getHours() * 60 + d.getMinutes();
+                  const [dh, dm]     = loginDeadline.split(':').map(Number);
+                  const deadlineMins = dh * 60 + dm;
+                  if (loginMins <= deadlineMins) {
+                    bgColor = '#34C759'; textColor = WHITE;   // on time or early
                   } else {
-                    bgColor = '#FFCC00'; textColor = BLACK;
+                    bgColor = '#FFCC00'; textColor = BLACK;   // late
                   }
                 } else if (isPast) {
                   bgColor = GRAY3; textColor = '#AEAEB2';
