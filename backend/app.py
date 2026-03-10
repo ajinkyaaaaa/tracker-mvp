@@ -15,6 +15,7 @@ from routes.locations import locations_bp
 from routes.activities import activities_bp
 from routes.admin import admin_bp
 from routes.saved_locations import saved_locations_bp
+from routes.sync import sync_bp
 
 load_dotenv()
 
@@ -33,6 +34,7 @@ app.register_blueprint(locations_bp,       url_prefix="/api/locations")
 app.register_blueprint(activities_bp,      url_prefix="/api/activities")
 app.register_blueprint(admin_bp,           url_prefix="/api/admin")
 app.register_blueprint(saved_locations_bp, url_prefix="/api/saved-locations")
+app.register_blueprint(sync_bp,            url_prefix="/api/sync")
 
 
 # ── Health check ──────────────────────────────────────────────────────────────
@@ -66,6 +68,10 @@ def handle_connect(auth=None):
 # Triggered by the employee client emitting "location-update".
 # Rebroadcasts the position to all admins in "admin-room".
 # Consumed by: AdminDashboardScreen.js → socket.on("employee-location")
+# NOTE (offline-first): the employee client no longer emits "location-update" in real-time.
+# Admin sees the last position from GET /api/admin/live (locations table), which is only
+# as fresh as the employee's last manual sync via SyncScreen → POST /api/sync/locations.
+# Re-enable live emit here if real-time tracking is reinstated.
 @socketio.on("location-update")
 def handle_location_update(data):
     emit(

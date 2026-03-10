@@ -48,22 +48,28 @@ export const api = {
   getMe:    ()                             => request('/auth/me'),
 
   // ── Locations — routes/locations.py ──────────────────────────────────────
-  // syncLocations: called every 60 s in MapScreen.js → syncLocations()
-  // getTodayPath:  called on load + every 30 s in MapScreen.js → loadTodayPathOnly()
+  // superseded by localDatabase.js — kept for admin/future use
   syncLocations: (locations) => request('/locations/sync',         { method: 'POST', body: JSON.stringify({ locations }) }),
   getTodayPath:  ()          => request('/locations/today'),
   getPathByDate: (date)      => request(`/locations/history/${date}`),
 
   // ── Activities — routes/activities.py ────────────────────────────────────
-  // logActivity:       called in MapScreen.js → autoArchiveIdleEvent()
-  // respondToActivity: called in ArchiveScreen.js → submitResponse() / muteLocationForHours()
-  // getPendingCount:   called every 30 s in MapScreen.js; badge shown on Archive tab
-  // getTodayActivities: called in ArchiveScreen.js → loadActivities()
+  // superseded by localDatabase.js — kept for admin/future use
   logActivity:        (data)                  => request('/activities',                       { method: 'POST', body: JSON.stringify(data) }),
   respondToActivity:  (activityId, response)  => request(`/activities/${activityId}/respond`, { method: 'PUT',  body: JSON.stringify({ response }) }),
   getPendingCount:    ()                       => request('/activities/pending/count'),
   getTodayActivities: ()                       => request('/activities/today'),
   getActivitiesByDate:(date)                   => request(`/activities/history/${date}`),
+
+  // ── Sync — routes/sync.py ────────────────────────────────────────────────
+  // Bulk upload endpoints consumed by SyncScreen.js → handleSync()
+  // getSyncStatus: consumed by CalendarScreen.js on mount → server-confirmed dates
+  syncBulkLocations:    (date, locations) => request('/sync/locations',     { method: 'POST', body: JSON.stringify({ date, locations }) }),
+  syncBulkStops:        (date, stops)     => request('/sync/stops',         { method: 'POST', body: JSON.stringify({ date, stops }) }),
+  syncBulkVisits:       (date, visits)    => request('/sync/visits',        { method: 'POST', body: JSON.stringify({ date, visits }) }),
+  syncBulkLoginSessions:(sessions)        => request('/sync/login-sessions', { method: 'POST', body: JSON.stringify({ sessions }) }),
+  getSyncStatus:        ()                => request('/sync/status'),
+  getLoginHistory:      ()                => request('/sync/login-history'),
 
   // ── Admin — routes/admin.py ───────────────────────────────────────────────
   // All consumed by AdminDashboardScreen.js

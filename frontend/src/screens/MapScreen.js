@@ -1,13 +1,17 @@
 // MapScreen.js — Primary employee tracking screen
 // Shows a full-screen live map with today's GPS trail, saved location pins,
 // idle-stop detection, and a bottom panel for marking locations.
+// Also renders a login-time widget (below nav pill) with an "i" button
+// that opens LoginCalendarModal showing past login/logout history.
 //
-// Data flows:
-//   locationService.js → caches GPS points → syncLocations() → POST /api/locations/sync
-//   GET /api/locations/today           → loadTodayPathOnly()   → Polyline on map
-//   GET /api/saved-locations           → loadSavedLocations()  → emoji markers on map
-//   idle detection → autoArchiveIdleEvent() → POST /api/activities → badge on Archive tab
-//   openInMaps()   → Linking.openURL (native Maps app hand-off, no backend)
+// Data flows (offline-first):
+//   locationService.js  → caches GPS points in AsyncStorage
+//   drainCacheToSQLite()→ every 60 s moves cache → localDatabase.js → local_locations
+//   localDatabase.js    → getTodayPath()          → Polyline on map
+//   GET /api/saved-locations → loadSavedLocations() → emoji markers + idle suppression
+//   idle detection → autoArchiveIdleEvent() → insertStop() / insertClientVisit() → local DB only
+//   loginTime (AuthContext) → insertLoginSession() → local_login_sessions on mount
+//   openInMaps()   → Linking.openURL (native Maps hand-off, no backend)
 
 import React, { useState, useEffect, useRef } from 'react';
 import {
@@ -18,17 +22,22 @@ import {
 import MapView, { Polyline, Marker, PROVIDER_GOOGLE } from 'react-native-maps';
 import * as Notifications from 'expo-notifications';
 import { MaterialIcons, Ionicons } from '@expo/vector-icons';
-import { useAuth } from '../contexts/AuthContext';       // → AuthContext.js
+import { useAuth } from '../contexts/AuthContext';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { api } from '../services/api';                   // → api.js
+import { api } from '../services/api';
 import {
   startTracking, stopTracking, getCurrentLocation,
   getCachedLocations, clearCachedLocations,
-} from '../services/locationService';                    // → locationService.js
+} from '../services/locationService';
+import {
+  insertLocation, getTodayPath,
+  insertStop, insertClientVisit, getStopsByDate,
+  insertLoginSession,
+} from '../services/localDatabase';
+import LoginCalendarModal from '../components/LoginCalendarModal';
 
 const { width } = Dimensions.get('window');
 
-// Black & white palette
 const BG    = '#FFFFFF';
 const CARD  = '#F2F2F7';
 const BLACK = '#000000';
@@ -86,6 +95,7 @@ export default function MapScreen({ navigation }) {
   const [markCategory,     setMarkCategory]     = useState('office');
   const [savedLocations,   setSavedLocations]   = useState([]);
   const [pendingCount,     setPendingCount]     = useState(0);
+  const [showLoginCal,     setShowLoginCal]     = useState(false);
 
   const mapRef   = useRef(null);
   const appState = useRef(AppState.currentState);
@@ -101,6 +111,9 @@ export default function MapScreen({ navigation }) {
   const panelAnim = useRef(new Animated.Value(60)).current;
   const pulse     = useRef(new Animated.Value(0)).current;
 
+  // Today's date as YYYY-MM-DD — used as the local DB partition key
+  const todayDate = new Date().toISOString().slice(0, 10);
+
   useEffect(() => {
     Animated.parallel([
       Animated.timing(navAnim,   { toValue: 1, duration: 500, useNativeDriver: true }),
@@ -115,23 +128,25 @@ export default function MapScreen({ navigation }) {
   }, []);
 
   useEffect(() => {
-    setupNotifications();   // request notification permission; wire tap → Archive
-    initTracking();         // start background GPS, set initial region, load today's path
-    loadSavedLocations();   // GET /api/saved-locations → map markers + idle suppression list
-    loadPendingCount();     // GET /api/activities/pending/count → Archive badge
-    loadMutedLocations();   // read muted zones from AsyncStorage
+    setupNotifications();
+    initTracking();
+    loadSavedLocations();
+    loadPendingCount();
+    loadMutedLocations();
+    // Record current login session locally for sync and login history calendar
+    if (loginTime) insertLoginSession(loginTime, loginTime.slice(0, 10)).catch(() => {});
     const sub = AppState.addEventListener('change', handleAppStateChange);
     return () => { sub.remove(); clearIdleTimers(); };
   }, []);
 
-  // Flush cached GPS points to the server every 60 s
-  // locationService.js writes to cache; this sends it via POST /api/locations/sync
+  // Drain cached GPS points from AsyncStorage → local SQLite every 60 s
+  // locationService.js writes to cache; this moves them into local_locations
   useEffect(() => {
-    const si = setInterval(syncLocations, 60000);
+    const si = setInterval(drainCacheToSQLite, 60000);
     return () => clearInterval(si);
   }, []);
 
-  // Refresh the map trail and Archive badge every 30 s
+  // Refresh map trail and pending badge from local DB every 30 s (no network calls)
   useEffect(() => {
     const ri = setInterval(() => { loadTodayPathOnly(); loadPendingCount(); }, 30000);
     return () => clearInterval(ri);
@@ -161,17 +176,22 @@ export default function MapScreen({ navigation }) {
     const sub = Notifications.addNotificationResponseReceivedListener(() => navigation.navigate('Archive'));
     return () => sub.remove();
   }
+
+  // Reads local_stops for today → pending count badge on Archive tab
   async function loadPendingCount() {
-    try { const d = await api.getPendingCount(); setPendingCount(d.count); } catch {}
+    try {
+      const stops = await getStopsByDate(todayDate);
+      setPendingCount(stops.filter((s) => s.status === 'pending').length);
+    } catch {}
   }
+
   function handleAppStateChange(nextState) {
     if (appState.current.match(/inactive|background/) && nextState === 'active') {
-      syncLocations(); loadTodayPathOnly(); loadPendingCount(); loadMutedLocations();
+      drainCacheToSQLite(); loadTodayPathOnly(); loadPendingCount(); loadMutedLocations();
     }
     appState.current = nextState;
   }
-  // Starts background GPS (locationService.js → startTracking), centres the map,
-  // and kicks off the idle detection timer.
+
   async function initTracking() {
     try {
       await startTracking();
@@ -185,28 +205,34 @@ export default function MapScreen({ navigation }) {
     } catch (err) { Alert.alert('Tracking Error', err.message); }
   }
 
-  // Fetches today's GPS trail → GET /api/locations/today (routes/locations.py)
-  // Result is rendered as a black Polyline on the MapView.
+  // Reads today's GPS trail from local SQLite → renders as black Polyline
   async function loadTodayPathOnly() {
     try {
-      const locs = await api.getTodayPath();
+      const locs = await getTodayPath(todayDate);
       setPath(locs.map((l) => ({ latitude: l.latitude, longitude: l.longitude })));
     } catch {}
   }
 
-  // Reads the local cache written by locationService.js and POST /api/locations/sync.
-  // Clears the cache only after a successful sync to avoid data loss.
-  async function syncLocations() {
+  // Moves GPS points from AsyncStorage cache → local SQLite, then refreshes the map trail.
+  // Replaces the old syncLocations() which posted directly to /api/locations/sync.
+  async function drainCacheToSQLite() {
     try {
       const cached = await getCachedLocations();
-      if (cached.length > 0) { await api.syncLocations(cached); await clearCachedLocations(); }
+      if (cached.length === 0) return;
+      for (const point of cached) {
+        await insertLocation({
+          latitude:    point.latitude,
+          longitude:   point.longitude,
+          recorded_at: point.recorded_at,
+          date:        point.recorded_at.slice(0, 10),
+        });
+      }
+      await clearCachedLocations();
+      await loadTodayPathOnly();
     } catch {}
   }
 
   // ── Idle detection ────────────────────────────────────────────────────────
-  // Logic: if the employee hasn't moved >50 m in IDLE_THRESHOLD_MS (15 min),
-  // fire a push notification asking them to log their activity.
-  // After GRACE_PERIOD_MS (10 min) with no response, auto-archive via POST /api/activities.
   function resetIdleSession(lat, lng) {
     clearIdleTimers();
     idleAnchorRef.current        = { latitude: lat, longitude: lng };
@@ -262,14 +288,39 @@ export default function MapScreen({ navigation }) {
       for (const m of active) cooldownZonesRef.current.push({ lat: m.lat, lng: m.lng, expiresAt: m.expiresAt });
     } catch {}
   }
-  // Creates a 'pending' activity when the grace period expires with no user response.
-  // POST /api/activities (routes/activities.py) → visible in ArchiveScreen.js.
+
+  // Saves idle stop to local SQLite (no server call).
+  // If the stop is near a saved location, also creates a local_client_visits row.
   async function autoArchiveIdleEvent(lat, lng, dwellMins) {
     try {
-      await api.logActivity({ latitude: lat, longitude: lng, triggered_at: new Date().toISOString(), dwell_duration: dwellMins, status: 'pending' });
-      loadPendingCount();
+      const arrivedAt = new Date(idleStartTimeRef.current).toISOString();
+      const stopId    = await insertStop({
+        latitude:      lat,
+        longitude:     lng,
+        arrived_at:    arrivedAt,
+        triggered_at:  new Date().toISOString(),
+        dwell_duration: dwellMins,
+        date:          todayDate,
+      });
+      const match = savedLocations.find(
+        (l) => getDistance(lat, lng, l.latitude, l.longitude) < SAVED_LOCATION_RADIUS
+      );
+      if (match) {
+        await insertClientVisit({
+          stop_id:            stopId,
+          saved_location_name: match.name,
+          saved_location_cat:  match.category,
+          latitude:            lat,
+          longitude:           lng,
+          arrived_at:          arrivedAt,
+          dwell_duration:      dwellMins,
+          date:                todayDate,
+        });
+      }
+      await loadPendingCount();
     } catch {}
   }
+
   function getDistance(lat1, lon1, lat2, lon2) {
     const R = 6371e3, r1 = (lat1 * Math.PI) / 180, r2 = (lat2 * Math.PI) / 180;
     const dLat = ((lat2 - lat1) * Math.PI) / 180, dLon = ((lon2 - lon1) * Math.PI) / 180;
@@ -278,7 +329,6 @@ export default function MapScreen({ navigation }) {
   }
 
   // ── Map actions ───────────────────────────────────────────────────────────
-  // Animates the MapView to the current GPS fix (triggered by "my-location" button)
   async function recenterMap() {
     const loc = await getCurrentLocation();
     if (loc && mapRef.current) {
@@ -288,6 +338,8 @@ export default function MapScreen({ navigation }) {
       );
     }
   }
+
+  // Saved pins still come from the server → idle suppression list + map markers
   async function loadSavedLocations() {
     try { const d = await api.getSavedLocations(); setSavedLocations(d); } catch {}
   }
@@ -313,12 +365,10 @@ export default function MapScreen({ navigation }) {
     } catch (err) { Alert.alert('Error', err.message); }
   }
   async function handleLogout() {
-    clearIdleTimers(); await stopTracking(); await syncLocations(); await logout();
+    clearIdleTimers(); await stopTracking(); await drainCacheToSQLite(); await logout();
   }
 
-  // Navigation handoff — no backend involved.
-  // Opens Apple Maps (iOS) or Google Maps (Android) at the current location
-  // using platform-native deep link URIs for turn-by-turn navigation.
+  // Navigation handoff to native Maps app — no backend involved
   async function openInMaps() {
     try {
       const loc = await getCurrentLocation();
@@ -385,15 +435,29 @@ export default function MapScreen({ navigation }) {
               </View>
             )}
           </TouchableOpacity>
+          <View style={styles.navDivider} />
+          <TouchableOpacity onPress={() => navigation.navigate('Sync')}>
+            <Text style={styles.navInactive}>Sync</Text>
+          </TouchableOpacity>
         </View>
         <TouchableOpacity onPress={handleLogout}>
           <Text style={styles.navLogout}>Logout</Text>
         </TouchableOpacity>
       </Animated.View>
 
+      {/* ── Login time widget — below nav pill ── */}
+      <Animated.View style={[styles.loginWidget, { opacity: navAnim }]}>
+        <View>
+          <Text style={styles.loginWidgetLabel}>LOGIN TIME</Text>
+          <Text style={styles.loginWidgetTime}>{formattedLoginTime}</Text>
+        </View>
+        <TouchableOpacity style={styles.infoBtn} onPress={() => setShowLoginCal(true)}>
+          <Text style={styles.infoBtnText}>i</Text>
+        </TouchableOpacity>
+      </Animated.View>
+
       {/* ── Map controls — Apple Maps / Google Maps style ── */}
       <Animated.View style={[styles.sideControls, { opacity: navAnim }]}>
-        {/* Satellite / Standard toggle */}
         <ScalePress
           style={[styles.sideBtn, mapType === 'satellite' && styles.sideBtnActive]}
           onPress={() => setMapType(mapType === 'standard' ? 'satellite' : 'standard')}
@@ -404,8 +468,6 @@ export default function MapScreen({ navigation }) {
             color={mapType === 'satellite' ? WHITE : BLACK}
           />
         </ScalePress>
-
-        {/* Recenter / My Location */}
         <ScalePress style={styles.sideBtn} onPress={recenterMap}>
           <MaterialIcons name="my-location" size={22} color={BLACK} />
         </ScalePress>
@@ -415,7 +477,6 @@ export default function MapScreen({ navigation }) {
       <Animated.View style={[styles.bottomPanel, { transform: [{ translateY: panelAnim }] }]}>
         <View style={styles.panelHandle} />
 
-        {/* Login time row */}
         <View style={styles.timeRow}>
           <View>
             <Text style={styles.timeLabel}>LOGIN TIME</Text>
@@ -431,25 +492,25 @@ export default function MapScreen({ navigation }) {
           </View>
         </View>
 
-        {/* Primary action — Mark location */}
         <ScalePress style={styles.markBtn} onPress={handleMarkLocation}>
           <Ionicons name="location-sharp" size={18} color={WHITE} />
           <Text style={styles.markBtnText}>Mark This Location</Text>
         </ScalePress>
 
-        {/* Secondary action — Open in Maps (navigation handoff) */}
         <ScalePress style={styles.openMapsBtn} onPress={openInMaps}>
           <Ionicons name="navigate-outline" size={16} color={BLACK} />
           <Text style={styles.openMapsBtnText}>Open in Maps</Text>
         </ScalePress>
       </Animated.View>
 
+      {/* ── Login calendar modal ── */}
+      <LoginCalendarModal visible={showLoginCal} onClose={() => setShowLoginCal(false)} />
+
       {/* ── Mark Location Modal ── */}
       <Modal visible={markModalVisible} transparent animationType="slide">
         <View style={styles.modalOverlay}>
           <View style={styles.modalCard}>
 
-            {/* Header row with title + close button */}
             <View style={styles.modalHeader}>
               <Text style={styles.modalTitle}>Mark Location</Text>
               <TouchableOpacity style={styles.modalCloseBtn} onPress={closeMarkModal}>
@@ -502,7 +563,6 @@ export default function MapScreen({ navigation }) {
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: BG },
 
-  // Nav pill
   navPill: {
     position: 'absolute', top: 56, left: 16, right: 16,
     flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
@@ -524,11 +584,26 @@ const styles = StyleSheet.create({
   navBadgeText: { color: WHITE, fontSize: 11, fontWeight: '800' },
   navLogout:    { color: GRAY, fontSize: 13, fontWeight: '600' },
 
-  // Side controls — rounded square, white card (Apple Maps / Google Maps style)
-  sideControls: {
-    position: 'absolute', right: 16, top: '38%',
-    gap: 8,
+  // Login time widget — slim Apple-style pill below the nav pill
+  loginWidget: {
+    position: 'absolute', top: 114, left: 16, right: 16,
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
+    backgroundColor: 'rgba(255,255,255,0.88)',
+    borderRadius: 18, paddingVertical: 10, paddingHorizontal: 16,
+    borderWidth: 1, borderColor: GRAY3,
+    shadowColor: '#000', shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.06, shadowRadius: 6, elevation: 3,
   },
+  loginWidgetLabel: { color: GRAY2, fontSize: 9, fontWeight: '700', letterSpacing: 1.4, textTransform: 'uppercase' },
+  loginWidgetTime:  { color: BLACK, fontSize: 20, fontWeight: '800', letterSpacing: -0.5, marginTop: 1 },
+  infoBtn: {
+    width: 26, height: 26, borderRadius: 13,
+    backgroundColor: CARD, borderWidth: 1, borderColor: GRAY3,
+    justifyContent: 'center', alignItems: 'center',
+  },
+  infoBtnText: { color: GRAY, fontSize: 12, fontWeight: '700', fontStyle: 'italic' },
+
+  sideControls: { position: 'absolute', right: 16, top: '38%', gap: 8 },
   sideBtn: {
     width: 44, height: 44, borderRadius: 11,
     backgroundColor: 'rgba(255,255,255,0.97)',
@@ -538,7 +613,6 @@ const styles = StyleSheet.create({
   },
   sideBtnActive: { backgroundColor: BLACK },
 
-  // Bottom panel
   bottomPanel: {
     position: 'absolute', bottom: 0, left: 0, right: 0,
     backgroundColor: WHITE,
@@ -590,7 +664,6 @@ const styles = StyleSheet.create({
   },
   savedPinIcon: { fontSize: 15 },
 
-  // Modal
   modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.35)', justifyContent: 'flex-end' },
   modalCard: {
     backgroundColor: WHITE,

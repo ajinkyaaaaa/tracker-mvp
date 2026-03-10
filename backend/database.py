@@ -96,6 +96,75 @@ def init_db():
         );
         CREATE INDEX IF NOT EXISTS idx_saved_locations_user
             ON saved_locations(user_id);
+
+        -- client_visits: matched stops where employee was at a saved "client" pin
+        -- Populated via POST /api/sync/visits (routes/sync.py) on manual sync
+        -- UNIQUE index enforces idempotency so re-syncing inserts 0 duplicate rows
+        CREATE TABLE IF NOT EXISTS client_visits (
+            id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id             INTEGER NOT NULL,
+            saved_location_name TEXT,
+            saved_location_cat  TEXT,
+            latitude            REAL    NOT NULL,
+            longitude           REAL    NOT NULL,
+            arrived_at          TEXT    NOT NULL,
+            dwell_duration      INTEGER DEFAULT 0,
+            date                TEXT    NOT NULL,
+            synced_at           TEXT    DEFAULT (datetime('now')),
+            FOREIGN KEY (user_id) REFERENCES users(id)
+        );
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_client_visits_unique
+            ON client_visits(user_id, arrived_at, saved_location_name);
+        CREATE INDEX IF NOT EXISTS idx_client_visits_user_date
+            ON client_visits(user_id, date);
+
+        -- user_sync_log: records which dates each employee has synced to the server
+        -- Stamped by every POST /api/sync/* endpoint; read by GET /api/sync/status
+        -- INSERT OR REPLACE updates the synced_at timestamp on re-sync
+        CREATE TABLE IF NOT EXISTS user_sync_log (
+            id        INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id   INTEGER NOT NULL,
+            date      TEXT    NOT NULL,
+            synced_at TEXT    NOT NULL,
+            FOREIGN KEY (user_id) REFERENCES users(id),
+            UNIQUE(user_id, date)
+        );
+
     """)
+    conn.commit()
+
+    # Idempotency unique indexes on existing tables — must be added after deduplication
+    # because the DB may already contain duplicate rows from the pre-offline-first era.
+    # Run outside executescript so each step can be handled independently.
+
+    # locations: remove legacy duplicates, then enforce uniqueness for re-sync safety
+    conn.execute("""
+        DELETE FROM locations WHERE id NOT IN (
+            SELECT MIN(id) FROM locations GROUP BY user_id, recorded_at
+        )
+    """)
+    conn.execute("""
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_locations_user_recorded_unique
+            ON locations(user_id, recorded_at)
+    """)
+
+    # activity_logs: remove legacy duplicates, then enforce uniqueness for re-sync safety
+    conn.execute("""
+        DELETE FROM activity_logs WHERE id NOT IN (
+            SELECT MIN(id) FROM activity_logs GROUP BY user_id, triggered_at, latitude, longitude
+        )
+    """)
+    conn.execute("""
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_activity_logs_user_triggered_unique
+            ON activity_logs(user_id, triggered_at, latitude, longitude)
+    """)
+
+    # login_logs: enforce uniqueness so INSERT OR IGNORE in sync works correctly
+    # login_time is set at the moment of login — no duplicates expected, safe to add directly
+    conn.execute("""
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_login_logs_user_time_unique
+            ON login_logs(user_id, login_time)
+    """)
+
     conn.commit()
     conn.close()
