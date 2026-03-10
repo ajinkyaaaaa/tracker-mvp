@@ -1,0 +1,59 @@
+1. Objective
+
+A cross-platform tracking application for iOS and Android that provides 100% traceability of employees during work hours (09:00 – 18:00).
+
+2. Core UI & Aesthetic
+
+Engine: Use Apple Maps (on iOS) and Google Maps (on Android).
+
+Styling: Modern, high-contrast, and colorful.
+
+iOS: Use MKStandardMapConfiguration with custom colorful overlays.
+
+Android: Use a JSON Google Maps style with vibrant accents (Electric Blue/Purple).
+
+Main Screen:
+
+Top-Right: Login Time badge (Glassmorphism style).
+
+Bottom-Center: View Message Archive button.
+
+Live Path: A bold, glowing polyline showing the day's travel trail.
+
+3. Functional Requirements
+
+A. Automatic Tracking Logic
+
+Geofencing/Idle Detection: If coordinates remain static for >15 minutes, trigger a high-visibility modal: "You’ve been here for a while, please state the activity."
+
+Background Execution: Must use persistent background location permissions (Always Allow) to ensure the path is traced even when the phone is in the user's pocket.
+
+B. The Message Archive (Daily Log)
+
+A chronological list of all "10-minute stops."
+
+Each Entry Includes: 1.  Timestamp of trigger.
+2.  Mini-map snapshot of the location.
+3.  User-inputted activity description.
+
+C. Admin Dashboard (Fleet View)
+
+Live View: Real-time map showing all active "Online" employees.
+
+History Replay: A date-picker and user-selector that renders the specific daily "Breadcrumb Trail" and all associated activity messages.
+
+4. Technical Stack Requirements (For Claude)
+
+Language: React Native (using react-native-maps) 
+
+Use Expo go for hosting so then I can test it on my devices.
+
+Logic:
+
+AppState listener to handle transitions between foreground and background.
+
+A local SQLite or Hive database to cache coordinates before syncing to the server.
+
+Conditional rendering: If Platform.OS === 'ios', use Apple Maps; else, use Google Maps.
+
+In the end: Create a md file with the schemas that you will create. This will be for my reference. 
