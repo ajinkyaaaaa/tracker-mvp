@@ -32,7 +32,7 @@ import {
 import {
   insertLocation, getTodayPath,
   insertStop, insertClientVisit, getStopsByDate,
-  insertLoginSession,
+  insertLoginSession, getLoginSessionsByDateRange,
 } from '../services/localDatabase';
 import LoginCalendarModal from '../components/LoginCalendarModal';
 
@@ -45,6 +45,30 @@ const GRAY  = '#6D6D72';
 const GRAY2 = '#C7C7CC';
 const GRAY3 = '#E5E5EA';
 const WHITE = '#FFFFFF';
+
+const LOGIN_DEADLINE_HOUR = 9; // 09:00 = on-time threshold for the green/yellow boxes
+const WEEK_LABELS = ['S', 'M', 'T', 'W', 'T', 'F', 'S']; // Sun → Sat
+
+// Returns 7 ISO date strings for the current Sun→Sat week
+function getWeekDates() {
+  const today = new Date();
+  const sunday = new Date(today);
+  sunday.setDate(today.getDate() - today.getDay());
+  return Array.from({ length: 7 }, (_, i) => {
+    const d = new Date(sunday);
+    d.setDate(sunday.getDate() + i);
+    return d.toISOString().slice(0, 10);
+  });
+}
+
+// Returns "MAR · 10 · W2" style label — month, day, and week-in-month
+function getWeekLabel() {
+  const today   = new Date();
+  const month   = today.toLocaleString('default', { month: 'short' }).toUpperCase();
+  const day     = today.getDate();
+  const weekNum = Math.ceil(day / 7);
+  return `${month} · ${day} · W${weekNum}`;
+}
 
 const MUTE_STORAGE_KEY      = 'muted_locations';
 const IDLE_THRESHOLD_MS     = 15 * 60 * 1000;
@@ -96,6 +120,7 @@ export default function MapScreen({ navigation }) {
   const [savedLocations,   setSavedLocations]   = useState([]);
   const [pendingCount,     setPendingCount]     = useState(0);
   const [showLoginCal,     setShowLoginCal]     = useState(false);
+  const [weekLoginMap,     setWeekLoginMap]     = useState({});
 
   const mapRef   = useRef(null);
   const appState = useRef(AppState.currentState);
@@ -112,7 +137,9 @@ export default function MapScreen({ navigation }) {
   const pulse     = useRef(new Animated.Value(0)).current;
 
   // Today's date as YYYY-MM-DD — used as the local DB partition key
-  const todayDate = new Date().toISOString().slice(0, 10);
+  const todayDate  = new Date().toISOString().slice(0, 10);
+  const weekDates  = getWeekDates();
+  const weekLabel  = getWeekLabel();
 
   useEffect(() => {
     Animated.parallel([
@@ -132,6 +159,7 @@ export default function MapScreen({ navigation }) {
     initTracking();
     loadSavedLocations();
     loadPendingCount();
+    loadWeekLogins();
     loadMutedLocations();
     // Record current login session locally for sync and login history calendar
     if (loginTime) insertLoginSession(loginTime, loginTime.slice(0, 10)).catch(() => {});
@@ -146,9 +174,9 @@ export default function MapScreen({ navigation }) {
     return () => clearInterval(si);
   }, []);
 
-  // Refresh map trail and pending badge from local DB every 30 s (no network calls)
+  // Refresh map trail, pending badge, and week login boxes from local DB every 30 s (no network calls)
   useEffect(() => {
-    const ri = setInterval(() => { loadTodayPathOnly(); loadPendingCount(); }, 30000);
+    const ri = setInterval(() => { loadTodayPathOnly(); loadPendingCount(); loadWeekLogins(); }, 30000);
     return () => clearInterval(ri);
   }, []);
 
@@ -182,6 +210,20 @@ export default function MapScreen({ navigation }) {
     try {
       const stops = await getStopsByDate(todayDate);
       setPendingCount(stops.filter((s) => s.status === 'pending').length);
+    } catch {}
+  }
+
+  // Builds date→sessions map for current Sat→Fri week → login widget status boxes
+  async function loadWeekLogins() {
+    try {
+      const dates = getWeekDates();
+      const rows = await getLoginSessionsByDateRange(dates[0], dates[6]);
+      const map = {};
+      for (const r of rows) {
+        if (!map[r.date]) map[r.date] = [];
+        map[r.date].push(r);
+      }
+      setWeekLoginMap(map);
     } catch {}
   }
 
@@ -447,13 +489,56 @@ export default function MapScreen({ navigation }) {
 
       {/* ── Login time widget — below nav pill ── */}
       <Animated.View style={[styles.loginWidget, { opacity: navAnim }]}>
+
+        {/* Left: login time */}
         <View>
           <Text style={styles.loginWidgetLabel}>LOGIN TIME</Text>
           <Text style={styles.loginWidgetTime}>{formattedLoginTime}</Text>
         </View>
-        <TouchableOpacity style={styles.infoBtn} onPress={() => setShowLoginCal(true)}>
-          <Text style={styles.infoBtnText}>i</Text>
-        </TouchableOpacity>
+
+        <View style={styles.loginWidgetDivider} />
+
+        {/* Right: week label + 7 status boxes + "i" button */}
+        <View style={styles.weekCluster}>
+          <Text style={styles.weekClusterHeader}>{weekLabel}</Text>
+          <View style={styles.weekBoxRow}>
+            <View style={styles.weekBoxes}>
+              {weekDates.map((date, i) => {
+                const sessions = weekLoginMap[date] || [];
+                const first    = sessions[0];
+                const isToday  = date === todayDate;
+                const isPast   = date < todayDate;
+
+                let bgColor   = CARD;
+                let textColor = GRAY2;
+
+                if (first) {
+                  const d    = new Date(first.login_time.includes('T') ? first.login_time : first.login_time.replace(' ', 'T') + 'Z');
+                  const mins = d.getHours() * 60 + d.getMinutes();
+                  if (mins <= LOGIN_DEADLINE_HOUR * 60) {
+                    bgColor = '#34C759'; textColor = WHITE;
+                  } else {
+                    bgColor = '#FFCC00'; textColor = BLACK;
+                  }
+                } else if (isPast) {
+                  bgColor = GRAY3; textColor = '#AEAEB2';
+                } else if (isToday) {
+                  bgColor = GRAY3; textColor = GRAY;
+                }
+
+                return (
+                  <View key={date} style={[styles.weekBox, { backgroundColor: bgColor }, isToday && styles.weekBoxToday]}>
+                    <Text style={[styles.weekBoxLabel, { color: textColor }]}>{WEEK_LABELS[i]}</Text>
+                  </View>
+                );
+              })}
+            </View>
+            <TouchableOpacity style={styles.infoBtn} onPress={() => setShowLoginCal(true)}>
+              <Text style={styles.infoBtnText}>i</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+
       </Animated.View>
 
       {/* ── Map controls — Apple Maps / Google Maps style ── */}
@@ -587,15 +672,26 @@ const styles = StyleSheet.create({
   // Login time widget — slim Apple-style pill below the nav pill
   loginWidget: {
     position: 'absolute', top: 114, left: 16, right: 16,
-    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
-    backgroundColor: 'rgba(255,255,255,0.88)',
-    borderRadius: 18, paddingVertical: 10, paddingHorizontal: 16,
+    flexDirection: 'row', alignItems: 'center', gap: 14,
+    backgroundColor: 'rgba(255,255,255,0.94)',
+    borderRadius: 18, paddingVertical: 11, paddingHorizontal: 16,
     borderWidth: 1, borderColor: GRAY3,
-    shadowColor: '#000', shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.06, shadowRadius: 6, elevation: 3,
+    shadowColor: '#000', shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.08, shadowRadius: 8, elevation: 4,
   },
-  loginWidgetLabel: { color: GRAY2, fontSize: 9, fontWeight: '700', letterSpacing: 1.4, textTransform: 'uppercase' },
-  loginWidgetTime:  { color: BLACK, fontSize: 20, fontWeight: '800', letterSpacing: -0.5, marginTop: 1 },
+  loginWidgetLabel:   { color: GRAY2, fontSize: 9, fontWeight: '700', letterSpacing: 1.4, textTransform: 'uppercase' },
+  loginWidgetTime:    { color: BLACK, fontSize: 20, fontWeight: '800', letterSpacing: -0.5, marginTop: 1 },
+  loginWidgetDivider: { width: 1, height: 34, backgroundColor: GRAY3 },
+  weekCluster:        { flex: 1, gap: 5 },
+  weekClusterHeader:  { color: GRAY, fontSize: 9, fontWeight: '700', letterSpacing: 0.5 },
+  weekBoxRow:  { flexDirection: 'row', alignItems: 'center', gap: 6 },
+  weekBoxes:   { flex: 1, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
+  weekBox: {
+    width: 22, height: 24, borderRadius: 5,
+    justifyContent: 'center', alignItems: 'center',
+  },
+  weekBoxToday: { borderWidth: 2, borderColor: BLACK, transform: [{ scale: 1.12 }] },
+  weekBoxLabel: { fontSize: 9, fontWeight: '800' },
   infoBtn: {
     width: 26, height: 26, borderRadius: 13,
     backgroundColor: CARD, borderWidth: 1, borderColor: GRAY3,

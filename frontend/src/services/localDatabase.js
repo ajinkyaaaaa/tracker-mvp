@@ -242,6 +242,14 @@ export async function markLoginSessionsSynced() {
   );
 }
 
+// Returns login sessions for a date range → MapScreen week login status boxes
+export async function getLoginSessionsByDateRange(startDate, endDate) {
+  return db.getAllAsync(
+    'SELECT * FROM local_login_sessions WHERE date >= ? AND date <= ? ORDER BY login_time ASC',
+    [startDate, endDate]
+  );
+}
+
 // Returns dates with unsynced local data → CalendarScreen hollow dots
 export async function getPendingDays() {
   const locationDates = await db.getAllAsync(
