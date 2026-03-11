@@ -138,6 +138,17 @@ def init_db():
         );
         INSERT OR IGNORE INTO company_settings (key, value) VALUES ('login_deadline', '09:00');
 
+        -- bug_reports: submitted by employees via ReportBugScreen.js → POST /api/bugs/report
+        -- Reviewed by admins via AdminBugReportsScreen.js → GET /api/bugs
+        CREATE TABLE IF NOT EXISTS bug_reports (
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id     INTEGER NOT NULL,
+            description TEXT    NOT NULL,
+            status      TEXT    DEFAULT 'open' CHECK(status IN ('open', 'resolved')),
+            created_at  TEXT    DEFAULT (datetime('now')),
+            FOREIGN KEY (user_id) REFERENCES users(id)
+        );
+
     """)
     conn.commit()
 

@@ -1,14 +1,25 @@
 # routes/auth.py — Authentication routes
 # Handles user registration, login, logout, and token validation.
 # All tokens are JWTs signed by JWT_SECRET_KEY (app.py).
+# Token expiry: before 18:00 local time → expires at 18:00; at/after 18:00 → expires in 5 hours.
 # Frontend entry point: src/services/api.js → api.login / api.register / api.logout / api.getMe
 
+from datetime import datetime, timedelta
 from flask import Blueprint, request, jsonify
-from flask_jwt_extended import create_access_token, jwt_required, get_jwt_identity
+from flask_jwt_extended import create_access_token, jwt_required, get_jwt_identity, get_jwt
 import bcrypt
 from database import get_db   # → database.py
 
 auth_bp = Blueprint("auth", __name__)
+
+
+# Returns (expires_delta, expires_at_iso) based on current local time.
+# Before 18:00 → token lives until 18:00 today; at/after 18:00 → 5-hour session.
+def _token_expiry():
+    now    = datetime.now()
+    cutoff = now.replace(hour=18, minute=0, second=0, microsecond=0)
+    delta  = (cutoff - now) if now < cutoff else timedelta(hours=5)
+    return delta, (now + delta).isoformat()
 
 
 # ── POST /api/auth/register ───────────────────────────────────────────────────
@@ -39,12 +50,18 @@ def register():
     user_id = cursor.lastrowid
     db.close()
 
-    # Embed role + name in JWT so downstream routes can read them without a DB hit
+    # Embed role + name in JWT; expiry follows office-hours rules (_token_expiry)
+    expires_delta, expires_at = _token_expiry()
     token = create_access_token(
         identity=str(user_id),
         additional_claims={"email": email, "role": role, "name": name},
+        expires_delta=expires_delta,
     )
-    return jsonify(token=token, user={"id": user_id, "name": name, "email": email, "role": role}), 201
+    return jsonify(
+        token=token,
+        tokenExpiresAt=expires_at,
+        user={"id": user_id, "name": name, "email": email, "role": role},
+    ), 201
 
 
 # ── POST /api/auth/login ──────────────────────────────────────────────────────
@@ -80,9 +97,12 @@ def login():
     ).fetchone()
     db.close()
 
+    # Expiry follows office-hours rules: before 18:00 → expires at 18:00, else → 5 h session
+    expires_delta, expires_at = _token_expiry()
     token = create_access_token(
         identity=str(user["id"]),
         additional_claims={"email": user["email"], "role": user["role"], "name": user["name"]},
+        expires_delta=expires_delta,
     )
 
     # SQLite stores datetime without timezone; append Z so the frontend parses it as UTC
@@ -91,6 +111,7 @@ def login():
 
     return jsonify(
         token=token,
+        tokenExpiresAt=expires_at,
         user={"id": user["id"], "name": user["name"], "email": user["email"], "role": user["role"]},
         loginTime=iso_time,
     )
@@ -141,6 +162,10 @@ def me():
     raw_time = login_log["login_time"] if login_log else None
     iso_time = (raw_time.replace(" ", "T") + "Z") if raw_time else None
 
+    # Read expiry from the live JWT so the frontend can reschedule its auto-logout timer
+    exp_ts     = get_jwt().get("exp")
+    expires_at = datetime.fromtimestamp(exp_ts).isoformat() if exp_ts else None
+
     return jsonify(
         id=user["id"],
         name=user["name"],
@@ -148,4 +173,36 @@ def me():
         role=user["role"],
         is_online=user["is_online"],
         loginTime=iso_time,
+        tokenExpiresAt=expires_at,
     )
+
+
+# ── POST /api/auth/change-password ────────────────────────────────────────────
+# Receives: { currentPassword, newPassword } from api.js → api.changePassword()
+# Validates the current password, then stores a new bcrypt hash
+@auth_bp.route("/change-password", methods=["POST"])
+@jwt_required()
+def change_password():
+    user_id = int(get_jwt_identity())
+    data    = request.get_json()
+    current = data.get("currentPassword", "")
+    new_pw  = data.get("newPassword", "")
+
+    if not current or not new_pw:
+        return jsonify(error="Both passwords are required"), 400
+    if len(new_pw) < 6:
+        return jsonify(error="New password must be at least 6 characters"), 400
+
+    db   = get_db()
+    user = db.execute("SELECT password FROM users WHERE id = ?", (user_id,)).fetchone()
+
+    if not bcrypt.checkpw(current.encode(), user["password"].encode()):
+        db.close()
+        return jsonify(error="Current password is incorrect"), 401
+
+    hashed = bcrypt.hashpw(new_pw.encode(), bcrypt.gensalt()).decode()
+    db.execute("UPDATE users SET password = ? WHERE id = ?", (hashed, user_id))
+    db.commit()
+    db.close()
+
+    return jsonify(message="Password updated successfully")

@@ -13,13 +13,14 @@
 //   loginTime (AuthContext) → insertLoginSession() → local_login_sessions on mount
 //   openInMaps()   → Linking.openURL (native Maps hand-off, no backend)
 
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
+import { useFocusEffect } from '@react-navigation/native';
 import {
   View, Text, StyleSheet, TouchableOpacity, Modal,
   TextInput, Alert, Platform, AppState, ScrollView,
   Animated, Dimensions, Linking,
 } from 'react-native';
-import MapView, { Polyline, Marker, PROVIDER_GOOGLE } from 'react-native-maps';
+import MapView, { Marker, Circle, PROVIDER_GOOGLE } from 'react-native-maps';
 import * as Notifications from 'expo-notifications';
 import { MaterialIcons, Ionicons } from '@expo/vector-icons';
 import { useAuth } from '../contexts/AuthContext';
@@ -61,13 +62,9 @@ function getWeekDates() {
   });
 }
 
-// Returns "MAR · 10 · W2" style label — month, day, and week-in-month
-function getWeekLabel() {
-  const today   = new Date();
-  const month   = today.toLocaleString('default', { month: 'short' }).toUpperCase();
-  const day     = today.getDate();
-  const weekNum = Math.ceil(day / 7);
-  return `${month} · ${day} · W${weekNum}`;
+// Returns the current week index (1-based) within the month
+function getCurrentWeekNum() {
+  return Math.ceil(new Date().getDate() / 7);
 }
 
 const MUTE_STORAGE_KEY      = 'muted_locations';
@@ -95,6 +92,111 @@ Notifications.setNotificationHandler({
   }),
 });
 
+// Acquiring/acquired location overlay — shown on first mount until GPS fix is confirmed
+function LocationAcquiringOverlay({ status }) {
+  const spinAnim  = useRef(new Animated.Value(0)).current;
+  const pulseAnim = useRef(new Animated.Value(0.4)).current;
+  const fadeAnim  = useRef(new Animated.Value(1)).current;
+
+  useEffect(() => {
+    if (status === 'acquiring') {
+      Animated.loop(
+        Animated.timing(spinAnim, { toValue: 1, duration: 2200, useNativeDriver: true })
+      ).start();
+      Animated.loop(
+        Animated.sequence([
+          Animated.timing(pulseAnim, { toValue: 1,   duration: 750, useNativeDriver: true }),
+          Animated.timing(pulseAnim, { toValue: 0.3, duration: 750, useNativeDriver: true }),
+        ])
+      ).start();
+    }
+    if (status === 'acquired') {
+      spinAnim.stopAnimation();
+      pulseAnim.stopAnimation();
+      Animated.timing(fadeAnim, { toValue: 0, duration: 600, delay: 1200, useNativeDriver: true }).start();
+    }
+  }, [status]);
+
+  const spin = spinAnim.interpolate({ inputRange: [0, 1], outputRange: ['0deg', '360deg'] });
+
+  return (
+    <Animated.View style={[overlayStyles.wrap, { opacity: fadeAnim }]}>
+      <View style={overlayStyles.card}>
+        {status === 'acquiring' ? (
+          <>
+            <Animated.View style={{ transform: [{ rotate: spin }] }}>
+              <MaterialIcons name="explore" size={42} color={BLACK} />
+            </Animated.View>
+            <Animated.Text style={[overlayStyles.text, { opacity: pulseAnim }]}>
+              Acquiring location…
+            </Animated.Text>
+          </>
+        ) : (
+          <>
+            <MaterialIcons name="check-circle" size={42} color={BLACK} />
+            <Text style={overlayStyles.text}>Location acquired</Text>
+          </>
+        )}
+      </View>
+    </Animated.View>
+  );
+}
+
+const overlayStyles = StyleSheet.create({
+  wrap: {
+    ...StyleSheet.absoluteFillObject,
+    justifyContent: 'center', alignItems: 'center',
+    zIndex: 999,
+    backgroundColor: 'rgba(255,255,255,0.82)',
+  },
+  card: {
+    alignItems: 'center', gap: 14,
+    backgroundColor: '#FFFFFF',
+    borderRadius: 24, paddingVertical: 32, paddingHorizontal: 40,
+    shadowColor: '#000', shadowOffset: { width: 0, height: 6 },
+    shadowOpacity: 0.10, shadowRadius: 20, elevation: 12,
+  },
+  text: { color: '#000000', fontSize: 15, fontWeight: '600', letterSpacing: 0.2 },
+});
+
+// Pulsating green live-location dot — replaces the native blue marker
+function LiveLocationMarker({ coordinate }) {
+  const ring1 = useRef(new Animated.Value(0)).current;
+  const ring2 = useRef(new Animated.Value(0)).current;
+
+  useEffect(() => {
+    const pulse = (anim, delay) =>
+      Animated.loop(
+        Animated.sequence([
+          Animated.delay(delay),
+          Animated.timing(anim, { toValue: 1, duration: 1800, useNativeDriver: false }),
+          Animated.timing(anim, { toValue: 0, duration: 0,    useNativeDriver: false }),
+        ])
+      ).start();
+    pulse(ring1, 0);
+    pulse(ring2, 900);
+  }, [ring1, ring2]);
+
+  const ringStyle = (anim) => ({
+    position: 'absolute',
+    width:        anim.interpolate({ inputRange: [0, 1], outputRange: [14, 54] }),
+    height:       anim.interpolate({ inputRange: [0, 1], outputRange: [14, 54] }),
+    borderRadius: anim.interpolate({ inputRange: [0, 1], outputRange: [7,  27] }),
+    opacity:      anim.interpolate({ inputRange: [0, 0.3, 1], outputRange: [0.55, 0.3, 0] }),
+    backgroundColor: '#34C759',
+  });
+
+  return (
+    <Marker coordinate={coordinate} anchor={{ x: 0.5, y: 0.5 }} tracksViewChanges>
+      <View style={{ width: 60, height: 60, justifyContent: 'center', alignItems: 'center' }}>
+        <Animated.View style={ringStyle(ring1)} />
+        <Animated.View style={ringStyle(ring2)} />
+        <View style={styles.liveDot} />
+      </View>
+    </Marker>
+  );
+}
+
 function ScalePress({ onPress, style, children }) {
   const scale = useRef(new Animated.Value(1)).current;
   return (
@@ -118,6 +220,8 @@ export default function MapScreen({ navigation }) {
   const [markName,         setMarkName]         = useState('');
   const [markCategory,     setMarkCategory]     = useState('office');
   const [savedLocations,   setSavedLocations]   = useState([]);
+  const [baseLocation,     setBaseLocation]     = useState(null);  // { name, icon, latitude, longitude, radius }
+  const [homeLocation,     setHomeLocation]     = useState(null);  // { name, icon, latitude, longitude, radius }
   const [pendingCount,     setPendingCount]     = useState(0);
   const [showLoginCal,     setShowLoginCal]     = useState(false);
   const [weekLoginMap,     setWeekLoginMap]     = useState({});
@@ -133,32 +237,96 @@ export default function MapScreen({ navigation }) {
   const notificationFiredRef = useRef(false);
   const cooldownZonesRef     = useRef([]);
 
-  const navAnim   = useRef(new Animated.Value(0)).current;
-  const panelAnim = useRef(new Animated.Value(60)).current;
-  const pulse     = useRef(new Animated.Value(0)).current;
+  const navAnim = useRef(new Animated.Value(0)).current;
+
+  // Orbit camera — refs so the interval closure always reads the latest values
+  const orbitRef      = useRef(null);   // setInterval handle
+  const headingRef    = useRef(0);      // current camera heading (0–360°)
+  const liveLocRef    = useRef(null);   // latest GPS position, synced from path state
+  const [orbitActive,    setOrbitActive]    = useState(false);
+  const [locationStatus, setLocationStatus] = useState('acquiring'); // 'acquiring' | 'acquired' | null
+  const hasAcquiredRef    = useRef(false);
+  const acquireTimeoutRef = useRef(null);
 
   // Today's date as YYYY-MM-DD — used as the local DB partition key
-  const todayDate  = new Date().toISOString().slice(0, 10);
-  const weekDates  = getWeekDates();
-  const weekLabel  = getWeekLabel();
+  const todayDate   = new Date().toISOString().slice(0, 10);
+  const weekDates   = getWeekDates();
+  const currentWeek = getCurrentWeekNum();
+  const _now        = new Date();
+  const dateLabel   = _now.toLocaleString('default', { month: 'short' }) + ' ' + _now.getDate();
+
+  // Group weekDates into consecutive segments by month; non-current-month days become a pill
+  const _refMonth = new Date(todayDate).getMonth();
+  const _refYear  = new Date(todayDate).getFullYear();
+  const weekSegments = [];
+  weekDates.forEach((date, i) => {
+    const d         = new Date(date);
+    const isCurrent = d.getMonth() === _refMonth && d.getFullYear() === _refYear;
+    const prev      = weekSegments[weekSegments.length - 1];
+    if (prev && prev.isCurrent === isCurrent) {
+      prev.indices.push(i);
+    } else {
+      weekSegments.push({ isCurrent, indices: [i], monthName: d.toLocaleString('default', { month: 'long' }) });
+    }
+  });
+
+  // Name of the location the user is currently inside, or null if not at any
+  const liveCoord = path.length > 0 ? path[path.length - 1] : null;
+  const currentPlaceName = (() => {
+    if (!liveCoord) return null;
+    if (baseLocation && getDistance(liveCoord.latitude, liveCoord.longitude,
+        baseLocation.latitude, baseLocation.longitude) <= (baseLocation.radius ?? 100))
+      return baseLocation.name || 'Base Location';
+    if (homeLocation && getDistance(liveCoord.latitude, liveCoord.longitude,
+        homeLocation.latitude, homeLocation.longitude) <= (homeLocation.radius ?? 100))
+      return homeLocation.name || 'Home';
+    const nearby = savedLocations.find(
+      l => getDistance(liveCoord.latitude, liveCoord.longitude, l.latitude, l.longitude) < SAVED_LOCATION_RADIUS
+    );
+    return nearby ? nearby.name : null;
+  })();
+
+  // Cycles 1→2→3→1 every 500 ms for the "You're moving..." dot animation
+  const [dotCount, setDotCount] = useState(1);
+  useEffect(() => {
+    const id = setInterval(() => setDotCount(d => d >= 3 ? 1 : d + 1), 500);
+    return () => clearInterval(id);
+  }, []);
 
   useEffect(() => {
-    Animated.parallel([
-      Animated.timing(navAnim,   { toValue: 1, duration: 500, useNativeDriver: true }),
-      Animated.spring(panelAnim, { toValue: 0, tension: 60, friction: 12, useNativeDriver: true, delay: 200 }),
-    ]).start();
-    Animated.loop(
-      Animated.sequence([
-        Animated.timing(pulse, { toValue: 1, duration: 1000, useNativeDriver: true }),
-        Animated.timing(pulse, { toValue: 0, duration: 1000, useNativeDriver: true }),
-      ])
-    ).start();
+    Animated.timing(navAnim, { toValue: 1, duration: 500, useNativeDriver: true }).start();
   }, []);
+
+  // Auto-hide overlay after 12 s if GPS never arrives
+  useEffect(() => {
+    acquireTimeoutRef.current = setTimeout(() => {
+      if (!hasAcquiredRef.current) setLocationStatus(null);
+    }, 12000);
+    return () => clearTimeout(acquireTimeoutRef.current);
+  }, []);
+
+  // Transition to 'acquired' on first GPS point, then recenter and fade out
+  useEffect(() => {
+    if (path.length > 0 && !hasAcquiredRef.current) {
+      hasAcquiredRef.current = true;
+      clearTimeout(acquireTimeoutRef.current);
+      setLocationStatus('acquired');
+      const coord = path[path.length - 1];
+      setTimeout(() => {
+        mapRef.current?.animateCamera(
+          { center: coord, pitch: 0, heading: 0, zoom: 15, altitude: 3200 },
+          { duration: 700 },
+        );
+        setTimeout(() => setLocationStatus(null), 800);
+      }, 1400);
+    }
+  }, [path]);
 
   useEffect(() => {
     setupNotifications();
     initTracking();
     loadSavedLocations();
+    loadBaseLocation();
     loadPendingCount();
     loadWeekLogins();
     loadLoginDeadline();
@@ -181,6 +349,64 @@ export default function MapScreen({ navigation }) {
     const ri = setInterval(() => { loadTodayPathOnly(); loadPendingCount(); loadWeekLogins(); }, 30000);
     return () => clearInterval(ri);
   }, []);
+
+  // Reload geo profiles + saved locations every time MapScreen gains focus.
+  // useFocusEffect handles nested navigators correctly — fires when returning
+  // from any parent Stack screen (Settings, ManageProfile, etc.), not just tab switches.
+  useFocusEffect(
+    useCallback(() => {
+      loadBaseLocation();
+      loadSavedLocations();
+    }, [])
+  );
+
+  // Keep liveLocRef current so the orbit interval closure always has the latest position
+  useEffect(() => {
+    if (path.length > 0) liveLocRef.current = path[path.length - 1];
+  }, [path]);
+
+  // ── Orbit camera ──────────────────────────────────────────────────────────
+  // Camera orbits the live location: altitude 3200 m, 800 m horizontal offset → pitch ≈ 14°.
+  // Heading is derived from wall-clock time so interval drift never compounds.
+  // 100 ms interval + 150 ms animation duration keeps motion smooth with no jump.
+  const ORBIT_PERIOD_MS = 30000; // one full orbit in 30 s
+
+  function startOrbit() {
+    if (!liveLocRef.current) {
+      Alert.alert('No location', 'Live location not available yet. Try again in a moment.');
+      return;
+    }
+    const startTime = Date.now() - (headingRef.current / 360) * ORBIT_PERIOD_MS;
+    orbitRef.current = setInterval(() => {
+      if (!mapRef.current || !liveLocRef.current) return;
+      const heading = ((Date.now() - startTime) % ORBIT_PERIOD_MS) / ORBIT_PERIOD_MS * 360;
+      headingRef.current = heading;
+      mapRef.current.animateCamera(
+        { center: liveLocRef.current, heading, pitch: 14, altitude: 3200 },
+        { duration: 150 },
+      );
+    }, 100);
+  }
+
+  function stopOrbit() {
+    clearInterval(orbitRef.current);
+    orbitRef.current = null;
+    // Smoothly return to flat top-down view
+    mapRef.current?.animateCamera({ pitch: 0, heading: 0, altitude: 3200 }, { duration: 700 });
+  }
+
+  function toggleOrbit() {
+    if (orbitActive) {
+      stopOrbit();
+      setOrbitActive(false);
+    } else {
+      startOrbit();
+      setOrbitActive(true);
+    }
+  }
+
+  // Clean up orbit interval on unmount
+  useEffect(() => () => { clearInterval(orbitRef.current); }, []);
 
   // ── Login time ────────────────────────────────────────────────────────────
   function parseLoginDate(ts) {
@@ -382,18 +608,29 @@ export default function MapScreen({ navigation }) {
 
   // ── Map actions ───────────────────────────────────────────────────────────
   async function recenterMap() {
-    const loc = await getCurrentLocation();
-    if (loc && mapRef.current) {
-      mapRef.current.animateToRegion(
-        { latitude: loc.coords.latitude, longitude: loc.coords.longitude, latitudeDelta: 0.01, longitudeDelta: 0.01 },
-        500
-      );
-    }
+    const target = liveLocRef.current ?? await getCurrentLocation().then(l => l?.coords ?? null).catch(() => null);
+    if (!target || !mapRef.current) return;
+    mapRef.current.animateCamera(
+      { center: target, pitch: 0, heading: 0, zoom: 14, altitude: 3200 },
+      { duration: 600 },
+    );
   }
 
   // Saved pins still come from the server → idle suppression list + map markers
   async function loadSavedLocations() {
     try { const d = await api.getSavedLocations(); setSavedLocations(d); } catch {}
+  }
+
+  // Reads base + home geo profiles from AsyncStorage → drawn as geofence circles on map
+  async function loadBaseLocation() {
+    try {
+      const [baseRaw, homeRaw] = await Promise.all([
+        AsyncStorage.getItem('base_location_data'),
+        AsyncStorage.getItem('home_location_data'),
+      ]);
+      setBaseLocation(baseRaw ? JSON.parse(baseRaw) : null);
+      setHomeLocation(homeRaw ? JSON.parse(homeRaw) : null);
+    } catch {}
   }
   function handleMarkLocation() {
     setMarkModalVisible(true);
@@ -438,8 +675,36 @@ export default function MapScreen({ navigation }) {
     } catch (err) { Alert.alert('Error', err.message); }
   }
 
-  const pulseScale   = pulse.interpolate({ inputRange: [0, 1], outputRange: [1, 2.4] });
-  const pulseOpacity = pulse.interpolate({ inputRange: [0, 1], outputRange: [0.6, 0] });
+
+  // Annotation colours flip to white in satellite mode so pins/circles stay visible
+  const isSat       = mapType === 'satellite';
+  const annStroke   = isSat ? 'rgba(255,255,255,0.75)' : 'rgba(0,0,0,0.50)';
+  const annFill     = isSat ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.06)';
+  const pinBg       = isSat ? WHITE : BLACK;
+  const pinIcon     = isSat ? BLACK : WHITE;
+  const savedBorder = isSat ? WHITE : BLACK;
+
+  // UI chrome theme — dark in normal mode, light in satellite mode
+  const uiBg      = isSat ? 'rgba(255,255,255,0.95)' : 'rgba(0,0,0,0.92)';
+  const uiBorder  = isSat ? GRAY3                    : 'rgba(255,255,255,0.12)';
+  const uiDivider = isSat ? GRAY3                    : 'rgba(255,255,255,0.12)';
+  const uiText    = isSat ? BLACK                    : WHITE;
+  const uiTextSub = isSat ? GRAY                     : 'rgba(255,255,255,0.80)';
+  const uiTextDim = isSat ? GRAY2                    : 'rgba(255,255,255,0.60)';
+  const uiCard    = isSat ? CARD                     : 'rgba(255,255,255,0.1)';
+
+  // Week box colours — differentiated per state in dark mode
+  const boxBgFuture  = isSat ? CARD  : 'rgba(255,255,255,0.10)';
+  const boxBgPast    = isSat ? GRAY3 : 'rgba(255,255,255,0.05)';
+  const boxBgToday   = isSat ? GRAY3 : 'rgba(255,255,255,0.22)';
+  const boxBorder    = isSat ? GRAY3 : 'rgba(255,255,255,0.14)';
+  const boxTxtFuture = isSat ? GRAY2         : 'rgba(255,255,255,0.40)';
+  const boxTxtPast   = isSat ? '#AEAEB2'     : 'rgba(255,255,255,0.22)';
+  const boxTxtToday  = isSat ? GRAY          : WHITE;
+  const uiIcon    = isSat ? BLACK                    : WHITE;
+  // Orbit button active state is always the inverse of the current UI base
+  const orbitActiveBg   = isSat ? BLACK : WHITE;
+  const orbitActiveIcon = isSat ? WHITE : BLACK;
 
   return (
     <View style={styles.container}>
@@ -451,15 +716,54 @@ export default function MapScreen({ navigation }) {
         provider={Platform.OS === 'android' ? PROVIDER_GOOGLE : undefined}
         initialRegion={region || { latitude: 19.076, longitude: 72.877, latitudeDelta: 0.05, longitudeDelta: 0.05 }}
         mapType={mapType}
-        showsUserLocation
+        pitchEnabled
+        rotateEnabled
+        showsUserLocation={false}
         showsMyLocationButton={false}
+        mapPadding={{ top: 195, right: 0, bottom: 0, left: 0 }}
       >
-        {path.length > 1 && (
-          <Polyline coordinates={path} strokeColor={BLACK} strokeWidth={4} lineJoin="round" />
+        {/* Geo profiles — rendered first so live location marker always appears on top */}
+        {baseLocation && (
+          <>
+            <Circle
+              center={{ latitude: baseLocation.latitude, longitude: baseLocation.longitude }}
+              radius={baseLocation.radius ?? 100}
+              strokeColor={annStroke}
+              fillColor={annFill}
+              strokeWidth={1.5}
+            />
+            <Marker
+              coordinate={{ latitude: baseLocation.latitude, longitude: baseLocation.longitude }}
+              anchor={{ x: 0.5, y: 1 }}
+              tracksViewChanges={false}
+            >
+              <View style={[styles.baseLocationPin, { backgroundColor: pinBg, borderColor: isSat ? BLACK : WHITE }]}>
+                <MaterialIcons name="star" size={14} color={pinIcon} />
+              </View>
+            </Marker>
+          </>
         )}
-        {path.length > 0 && (
-          <Marker coordinate={path[path.length - 1]} title="Current" />
+        {homeLocation && (
+          <>
+            <Circle
+              center={{ latitude: homeLocation.latitude, longitude: homeLocation.longitude }}
+              radius={homeLocation.radius ?? 100}
+              strokeColor={annStroke}
+              fillColor={annFill}
+              strokeWidth={1.5}
+            />
+            <Marker
+              coordinate={{ latitude: homeLocation.latitude, longitude: homeLocation.longitude }}
+              anchor={{ x: 0.5, y: 1 }}
+              tracksViewChanges={false}
+            >
+              <View style={[styles.baseLocationPin, { backgroundColor: pinBg, borderColor: isSat ? BLACK : WHITE }]}>
+                <MaterialIcons name="home" size={14} color={pinIcon} />
+              </View>
+            </Marker>
+          </>
         )}
+
         {savedLocations.map((loc) => (
           <Marker
             key={`saved-${loc.id}`}
@@ -467,137 +771,203 @@ export default function MapScreen({ navigation }) {
             title={loc.name}
             anchor={{ x: 0.5, y: 0.5 }}
           >
-            <View style={styles.savedPin}>
+            <View style={[styles.savedPin, { borderColor: savedBorder }]}>
               <Text style={styles.savedPinIcon}>{CATEGORY_ICONS[loc.category] || '\u{1F4CD}'}</Text>
             </View>
           </Marker>
         ))}
+
+        {/* Live location rendered last so it always appears on top */}
+        {path.length > 0 && <LiveLocationMarker coordinate={path[path.length - 1]} />}
       </MapView>
 
       {/* ── Floating nav pill ── */}
-      <Animated.View style={[styles.navPill, { opacity: navAnim }]}>
+      <Animated.View style={[styles.navPill, { opacity: navAnim, backgroundColor: uiBg, borderColor: uiBorder }]}>
         <View style={styles.navLeft}>
-          <Text style={styles.navActive}>Home</Text>
-          <View style={styles.navDivider} />
+          <Text style={[styles.navActive, { color: uiText }]}>Home</Text>
+          <View style={[styles.navDivider, { backgroundColor: uiDivider }]} />
           <TouchableOpacity onPress={() => navigation.navigate('Archive')} style={styles.navArchiveBtn}>
-            <Text style={styles.navInactive}>Archive</Text>
+            <Text style={[styles.navInactive, { color: uiTextSub }]}>Archive</Text>
             {pendingCount > 0 && (
               <View style={styles.navBadge}>
                 <Text style={styles.navBadgeText}>{pendingCount}</Text>
               </View>
             )}
           </TouchableOpacity>
-          <View style={styles.navDivider} />
+          <View style={[styles.navDivider, { backgroundColor: uiDivider }]} />
           <TouchableOpacity onPress={() => navigation.navigate('Sync')}>
-            <Text style={styles.navInactive}>Sync</Text>
+            <Text style={[styles.navInactive, { color: uiTextSub }]}>Sync</Text>
           </TouchableOpacity>
         </View>
         <TouchableOpacity onPress={handleLogout}>
-          <Text style={styles.navLogout}>Logout</Text>
+          <Text style={[styles.navLogout, { color: uiTextSub }]}>Logout</Text>
         </TouchableOpacity>
       </Animated.View>
 
       {/* ── Login time widget — below nav pill ── */}
-      <Animated.View style={[styles.loginWidget, { opacity: navAnim }]}>
+      <Animated.View style={[styles.loginWidget, { opacity: navAnim, backgroundColor: uiBg, borderColor: uiBorder }]}>
 
         {/* Left: login time */}
         <View>
-          <Text style={styles.loginWidgetLabel}>LOGIN TIME</Text>
-          <Text style={styles.loginWidgetTime}>{formattedLoginTime}</Text>
+          <Text style={[styles.loginWidgetLabel, { color: uiTextDim }]}>LOGIN TIME</Text>
+          <Text style={[styles.loginWidgetTime, { color: uiText }]}>{formattedLoginTime}</Text>
         </View>
 
-        <View style={styles.loginWidgetDivider} />
+        <View style={[styles.loginWidgetDivider, { backgroundColor: uiDivider }]} />
 
-        {/* Right: week label + 7 status boxes + "i" button */}
+        {/* Right: date+week label · 7 status boxes · "i" button — all in one row */}
         <View style={styles.weekCluster}>
-          <Text style={styles.weekClusterHeader}>{weekLabel}</Text>
           <View style={styles.weekBoxRow}>
+            <View style={styles.weekDateStack}>
+              <Text style={[styles.weekDateText, { color: uiText }]}>{dateLabel}</Text>
+              <Text style={[styles.weekNumText, { color: uiTextSub }]}>{`W${currentWeek}`}</Text>
+            </View>
             <View style={styles.weekBoxes}>
-              {weekDates.map((date, i) => {
-                const sessions = weekLoginMap[date] || [];
-                const first    = sessions[0];
-                const isToday  = date === todayDate;
-                const isPast   = date < todayDate;
-
-                let bgColor   = CARD;
-                let textColor = GRAY2;
-
-                if (first) {
-                  const d = new Date(first.login_time.includes('T') ? first.login_time : first.login_time.replace(' ', 'T') + 'Z');
-                  const loginMins    = d.getHours() * 60 + d.getMinutes();
-                  const [dh, dm]     = loginDeadline.split(':').map(Number);
-                  const deadlineMins = dh * 60 + dm;
-                  if (loginMins <= deadlineMins) {
-                    bgColor = '#34C759'; textColor = WHITE;   // on time or early
-                  } else {
-                    bgColor = '#FFCC00'; textColor = BLACK;   // late
-                  }
-                } else if (isPast) {
-                  bgColor = GRAY3; textColor = '#AEAEB2';
-                } else if (isToday) {
-                  bgColor = GRAY3; textColor = GRAY;
+              {weekSegments.flatMap((seg) => {
+                if (!seg.isCurrent) {
+                  const n = seg.indices.length;
+                  const pillWidth = n * 22 + (n - 1) * 3;
+                  return [(
+                    <View key={seg.monthName} style={[styles.nextMonthPill, { width: pillWidth, backgroundColor: uiCard }]}>
+                      <Text style={[styles.nextMonthLabel, { color: uiTextSub }]}>{seg.monthName}</Text>
+                    </View>
+                  )];
                 }
+                return seg.indices.map(i => {
+                  const date     = weekDates[i];
+                  const sessions = weekLoginMap[date] || [];
+                  const first    = sessions[0];
+                  const isToday  = date === todayDate;
+                  const isPast   = date < todayDate;
 
-                return (
-                  <View key={date} style={[styles.weekBox, { backgroundColor: bgColor }, isToday && styles.weekBoxToday]}>
-                    <Text style={[styles.weekBoxLabel, { color: textColor }]}>{WEEK_LABELS[i]}</Text>
-                  </View>
-                );
+                  let bgColor     = boxBgFuture;
+                  let textColor   = boxTxtFuture;
+                  let borderColor = boxBorder;
+                  let hasBorder   = true;
+
+                  if (first) {
+                    const d = new Date(first.login_time.includes('T') ? first.login_time : first.login_time.replace(' ', 'T') + 'Z');
+                    const loginMins    = d.getHours() * 60 + d.getMinutes();
+                    const [dh, dm]     = loginDeadline.split(':').map(Number);
+                    const deadlineMins = dh * 60 + dm;
+                    if (loginMins <= deadlineMins) {
+                      bgColor = '#34C759'; textColor = WHITE; hasBorder = false;
+                    } else {
+                      bgColor = '#FFCC00'; textColor = BLACK; hasBorder = false;
+                    }
+                  } else if (isPast) {
+                    bgColor = boxBgPast; textColor = boxTxtPast;
+                  } else if (isToday) {
+                    bgColor = boxBgToday; textColor = boxTxtToday; borderColor = uiText;
+                  }
+
+                  return (
+                    <View
+                      key={date}
+                      style={[
+                        styles.weekBox,
+                        { backgroundColor: bgColor },
+                        hasBorder && { borderWidth: 1, borderColor },
+                        isToday && { borderWidth: 2, borderColor: uiText, transform: [{ scale: 1.12 }] },
+                      ]}
+                    >
+                      <Text style={[styles.weekBoxLabel, { color: textColor }]}>{WEEK_LABELS[i]}</Text>
+                    </View>
+                  );
+                });
               })}
             </View>
-            <TouchableOpacity style={styles.infoBtn} onPress={() => setShowLoginCal(true)}>
-              <Text style={styles.infoBtnText}>i</Text>
+            <TouchableOpacity style={[styles.infoBtn, { backgroundColor: uiCard, borderColor: uiBorder }]} onPress={() => setShowLoginCal(true)}>
+              <Text style={[styles.infoBtnText, { color: uiTextSub }]}>i</Text>
             </TouchableOpacity>
           </View>
         </View>
 
       </Animated.View>
 
-      {/* ── Map controls — Apple Maps / Google Maps style ── */}
-      <Animated.View style={[styles.sideControls, { opacity: navAnim }]}>
+      {/* ── Orbit toggle — top-right below login widget ── */}
+      <Animated.View style={[styles.orbitBtnWrap, { opacity: navAnim }]}>
         <ScalePress
-          style={[styles.sideBtn, mapType === 'satellite' && styles.sideBtnActive]}
-          onPress={() => setMapType(mapType === 'standard' ? 'satellite' : 'standard')}
+          style={[styles.orbitBtn, { backgroundColor: orbitActive ? orbitActiveBg : uiBg, borderColor: uiBorder }]}
+          onPress={toggleOrbit}
         >
-          <MaterialIcons
-            name={mapType === 'satellite' ? 'map' : 'layers'}
-            size={22}
-            color={mapType === 'satellite' ? WHITE : BLACK}
-          />
-        </ScalePress>
-        <ScalePress style={styles.sideBtn} onPress={recenterMap}>
-          <MaterialIcons name="my-location" size={22} color={BLACK} />
+          <MaterialIcons name="360" size={22} color={orbitActive ? orbitActiveIcon : uiIcon} />
         </ScalePress>
       </Animated.View>
 
-      {/* ── Bottom panel ── */}
-      <Animated.View style={[styles.bottomPanel, { transform: [{ translateY: panelAnim }] }]}>
-        <View style={styles.panelHandle} />
+      {/* ── Location status banner — always visible once GPS fix acquired ── */}
+      {liveCoord && (
+        <Animated.View style={[styles.atBaseWidget, { opacity: navAnim }]}>
+          <View style={[styles.atBasePill, isSat && styles.atBasePillSat]}>
+            <MaterialIcons
+              name={currentPlaceName ? 'location-on' : 'near-me'}
+              size={13}
+              color={isSat ? 'rgba(0,0,0,0.6)' : 'rgba(255,255,255,0.75)'}
+            />
+            {currentPlaceName ? (
+              <Text style={[styles.atBaseText, isSat && styles.atBaseTextSat]} numberOfLines={1}>
+                You're at <Text style={[styles.atBaseName, isSat && styles.atBaseNameSat]}>{currentPlaceName}</Text>
+              </Text>
+            ) : (
+              <Text style={[styles.atBaseText, isSat && styles.atBaseTextSat]}>
+                You're moving<Text style={[styles.atBaseName, isSat && styles.atBaseNameSat]}>{'.'.repeat(dotCount)}</Text>
+              </Text>
+            )}
+          </View>
+        </Animated.View>
+      )}
 
-        <View style={styles.timeRow}>
-          <View>
-            <Text style={styles.timeLabel}>LOGIN TIME</Text>
-            <Text style={styles.timeValue}>{formattedLoginTime}</Text>
-            <Text style={styles.timeDate}>{formattedLoginDate}</Text>
-          </View>
-          <View style={styles.liveBadge}>
-            <View style={styles.liveDotWrap}>
-              <Animated.View style={[styles.livePulse, { transform: [{ scale: pulseScale }], opacity: pulseOpacity }]} />
-              <View style={styles.liveDot} />
-            </View>
-            <Text style={styles.liveText}>LIVE</Text>
-          </View>
+      {/* ── Bottom action ribbon ── */}
+      <Animated.View style={[styles.bottomRibbon, { opacity: navAnim, backgroundColor: uiBg, borderColor: uiBorder }]}>
+
+        <View style={styles.ribbonCell}>
+          <ScalePress style={styles.ribbonBtn} onPress={recenterMap}>
+            <MaterialIcons name="my-location" size={22} color={uiIcon} />
+          </ScalePress>
         </View>
 
-        <ScalePress style={styles.markBtn} onPress={handleMarkLocation}>
-          <Ionicons name="location-sharp" size={18} color={WHITE} />
-          <Text style={styles.markBtnText}>Mark This Location</Text>
-        </ScalePress>
+        <View style={[styles.ribbonDivider, { backgroundColor: uiDivider }]} />
 
-        <ScalePress style={styles.openMapsBtn} onPress={openInMaps}>
-          <Ionicons name="navigate-outline" size={16} color={BLACK} />
-          <Text style={styles.openMapsBtnText}>Open in Maps</Text>
-        </ScalePress>
+        <View style={styles.ribbonCell}>
+          <ScalePress
+            style={styles.ribbonBtn}
+            onPress={() => setMapType(mapType === 'standard' ? 'satellite' : 'standard')}
+          >
+            {/* Active wrap always BLACK bg — only shown in satellite mode when ribbon is white */}
+            <View style={[styles.ribbonIconWrap, mapType === 'satellite' && styles.ribbonIconWrapActive]}>
+              <MaterialIcons
+                name={mapType === 'satellite' ? 'map' : 'layers'}
+                size={22}
+                color={mapType === 'satellite' ? WHITE : uiIcon}
+              />
+            </View>
+          </ScalePress>
+        </View>
+
+        <View style={[styles.ribbonDivider, { backgroundColor: uiDivider }]} />
+
+        <View style={styles.ribbonCell}>
+          <ScalePress style={styles.ribbonBtn} onPress={handleMarkLocation}>
+            <MaterialIcons name="add-location-alt" size={22} color={uiIcon} />
+          </ScalePress>
+        </View>
+
+        <View style={[styles.ribbonDivider, { backgroundColor: uiDivider }]} />
+
+        <View style={styles.ribbonCell}>
+          <ScalePress style={styles.ribbonBtn} onPress={openInMaps}>
+            <MaterialIcons name="open-in-new" size={20} color={uiIcon} />
+          </ScalePress>
+        </View>
+
+        <View style={[styles.ribbonDivider, { backgroundColor: uiDivider }]} />
+
+        <View style={styles.ribbonCell}>
+          <ScalePress style={styles.ribbonBtn} onPress={() => navigation.navigate('Settings')}>
+            <MaterialIcons name="settings" size={22} color={uiIcon} />
+          </ScalePress>
+        </View>
+
       </Animated.View>
 
       {/* ── Login calendar modal ── */}
@@ -653,6 +1023,10 @@ export default function MapScreen({ navigation }) {
           </View>
         </View>
       </Modal>
+
+      {/* ── Location acquiring overlay — shown until first GPS fix ── */}
+      {locationStatus !== null && <LocationAcquiringOverlay status={locationStatus} />}
+
     </View>
   );
 }
@@ -663,107 +1037,115 @@ const styles = StyleSheet.create({
   navPill: {
     position: 'absolute', top: 56, left: 16, right: 16,
     flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
-    backgroundColor: 'rgba(255,255,255,0.95)',
     borderRadius: 32, paddingVertical: 13, paddingHorizontal: 20,
-    borderWidth: 1, borderColor: GRAY3,
+    borderWidth: 1,
     shadowColor: '#000', shadowOffset: { width: 0, height: 2 },
     shadowOpacity: 0.1, shadowRadius: 8, elevation: 6,
   },
   navLeft:       { flexDirection: 'row', alignItems: 'center', gap: 14 },
-  navActive:     { color: BLACK, fontSize: 16, fontWeight: '800' },
-  navDivider:    { width: 1, height: 16, backgroundColor: GRAY3 },
+  navActive:     { fontSize: 16, fontWeight: '800' },
+  navDivider:    { width: 1, height: 16 },
   navArchiveBtn: { flexDirection: 'row', alignItems: 'center', gap: 6 },
-  navInactive:   { color: GRAY, fontSize: 16, fontWeight: '600' },
+  navInactive:   { fontSize: 16, fontWeight: '600' },
   navBadge: {
     backgroundColor: '#FF3B30', borderRadius: 10,
     minWidth: 20, height: 20, justifyContent: 'center', alignItems: 'center', paddingHorizontal: 5,
   },
   navBadgeText: { color: WHITE, fontSize: 11, fontWeight: '800' },
-  navLogout:    { color: GRAY, fontSize: 13, fontWeight: '600' },
+  navLogout:    { fontSize: 13, fontWeight: '600' },
 
   // Login time widget — slim Apple-style pill below the nav pill
   loginWidget: {
     position: 'absolute', top: 114, left: 16, right: 16,
     flexDirection: 'row', alignItems: 'center', gap: 14,
-    backgroundColor: 'rgba(255,255,255,0.94)',
     borderRadius: 18, paddingVertical: 11, paddingHorizontal: 16,
-    borderWidth: 1, borderColor: GRAY3,
+    borderWidth: 1,
     shadowColor: '#000', shadowOffset: { width: 0, height: 2 },
     shadowOpacity: 0.08, shadowRadius: 8, elevation: 4,
   },
-  loginWidgetLabel:   { color: GRAY2, fontSize: 9, fontWeight: '700', letterSpacing: 1.4, textTransform: 'uppercase' },
-  loginWidgetTime:    { color: BLACK, fontSize: 20, fontWeight: '800', letterSpacing: -0.5, marginTop: 1 },
-  loginWidgetDivider: { width: 1, height: 34, backgroundColor: GRAY3 },
-  weekCluster:        { flex: 1, gap: 5 },
-  weekClusterHeader:  { color: GRAY, fontSize: 9, fontWeight: '700', letterSpacing: 0.5 },
-  weekBoxRow:  { flexDirection: 'row', alignItems: 'center', gap: 6 },
-  weekBoxes:   { flex: 1, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
+  loginWidgetLabel:   { fontSize: 9, fontWeight: '700', letterSpacing: 1.4, textTransform: 'uppercase' },
+  loginWidgetTime:    { fontSize: 20, fontWeight: '800', letterSpacing: -0.5, marginTop: 1 },
+  loginWidgetDivider: { width: 1, height: 34 },
+
+  atBaseWidget: {
+    position: 'absolute', bottom: 100, left: 0, right: 0,
+    alignItems: 'center',
+    flexDirection: 'row', justifyContent: 'center', gap: 6,
+    paddingHorizontal: 16,
+  },
+  atBasePill: {
+    flexDirection: 'row', alignItems: 'center', gap: 6,
+    backgroundColor: BLACK,
+    borderRadius: 12, paddingVertical: 8, paddingHorizontal: 14,
+    shadowColor: '#000', shadowOffset: { width: 0, height: 3 },
+    shadowOpacity: 0.25, shadowRadius: 8, elevation: 6,
+  },
+  atBaseText: { color: 'rgba(255,255,255,0.75)', fontSize: 14, fontWeight: '500' },
+  atBaseName: { color: WHITE, fontWeight: '700' },
+  atBasePillSat: { backgroundColor: WHITE },
+  atBaseTextSat: { color: 'rgba(0,0,0,0.6)' },
+  atBaseNameSat: { color: BLACK },
+  weekCluster:    { flex: 1 },
+  weekBoxRow:     { flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  weekDateStack:  { gap: 1 },
+  weekDateText:   { fontSize: 13, fontWeight: '700', letterSpacing: -0.2 },
+  weekNumText:    { fontSize: 11, fontWeight: '600' },
+  weekBoxes:      { flexDirection: 'row', alignItems: 'center', gap: 3 },
+  nextMonthPill: {
+    height: 24, borderRadius: 5,
+    justifyContent: 'center', alignItems: 'center',
+  },
+  nextMonthLabel: { fontSize: 8, fontWeight: '700', letterSpacing: 0.3 },
   weekBox: {
     width: 22, height: 24, borderRadius: 5,
     justifyContent: 'center', alignItems: 'center',
   },
-  weekBoxToday: { borderWidth: 2, borderColor: BLACK, transform: [{ scale: 1.12 }] },
+  weekBoxToday: { borderWidth: 2 },
   weekBoxLabel: { fontSize: 9, fontWeight: '800' },
   infoBtn: {
     width: 26, height: 26, borderRadius: 13,
-    backgroundColor: CARD, borderWidth: 1, borderColor: GRAY3,
+    borderWidth: 1,
     justifyContent: 'center', alignItems: 'center',
   },
-  infoBtnText: { color: GRAY, fontSize: 12, fontWeight: '700', fontStyle: 'italic' },
+  infoBtnText: { fontSize: 12, fontWeight: '700', fontStyle: 'italic' },
 
-  sideControls: { position: 'absolute', right: 16, top: '38%', gap: 8 },
-  sideBtn: {
-    width: 44, height: 44, borderRadius: 11,
-    backgroundColor: 'rgba(255,255,255,0.97)',
+  orbitBtnWrap: { position: 'absolute', top: 186, right: 16 },
+  orbitBtn: {
+    width: 48, height: 48, borderRadius: 24,
     justifyContent: 'center', alignItems: 'center',
-    shadowColor: '#000', shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.18, shadowRadius: 6, elevation: 5,
-  },
-  sideBtnActive: { backgroundColor: BLACK },
-
-  bottomPanel: {
-    position: 'absolute', bottom: 0, left: 0, right: 0,
-    backgroundColor: WHITE,
-    borderTopLeftRadius: 28, borderTopRightRadius: 28,
-    paddingHorizontal: 24, paddingTop: 14, paddingBottom: 44,
-    borderTopWidth: 1, borderColor: GRAY3,
-    shadowColor: '#000', shadowOffset: { width: 0, height: -4 },
-    shadowOpacity: 0.07, shadowRadius: 16, elevation: 12,
-  },
-  panelHandle: {
-    width: 36, height: 4, borderRadius: 2,
-    backgroundColor: GRAY2, alignSelf: 'center', marginBottom: 22,
-  },
-
-  timeRow:   { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-end', marginBottom: 20 },
-  timeLabel: { color: GRAY,  fontSize: 11, fontWeight: '700', letterSpacing: 1.2, marginBottom: 4 },
-  timeValue: { color: BLACK, fontSize: 36, fontWeight: '900', letterSpacing: -0.5 },
-  timeDate:  { color: GRAY,  fontSize: 13, marginTop: 2 },
-
-  liveBadge:   { alignItems: 'center', gap: 4 },
-  liveDotWrap: { width: 20, height: 20, alignItems: 'center', justifyContent: 'center' },
-  livePulse: {
-    position: 'absolute', width: 12, height: 12, borderRadius: 6, backgroundColor: '#34C759',
-  },
-  liveDot:  { width: 10, height: 10, borderRadius: 5, backgroundColor: '#34C759' },
-  liveText: { color: GRAY, fontSize: 10, fontWeight: '700', letterSpacing: 1 },
-
-  markBtn: {
-    flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 10,
-    backgroundColor: BLACK, borderRadius: 18, paddingVertical: 16,
-    marginBottom: 10,
+    borderWidth: 1,
     shadowColor: '#000', shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.15, shadowRadius: 12, elevation: 5,
+    shadowOpacity: 0.12, shadowRadius: 12, elevation: 8,
   },
-  markBtnText: { color: WHITE, fontSize: 16, fontWeight: '800', letterSpacing: 0.2 },
 
-  openMapsBtn: {
-    flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8,
-    borderRadius: 18, paddingVertical: 14,
-    borderWidth: 1.5, borderColor: BLACK,
+  bottomRibbon: {
+    position: 'absolute', bottom: 36, left: 40, right: 40,
+    flexDirection: 'row', alignItems: 'center',
+    borderRadius: 32, paddingVertical: 13,
+    borderWidth: 1,
+    shadowColor: '#000', shadowOffset: { width: 0, height: 8 },
+    shadowOpacity: 0.12, shadowRadius: 24, elevation: 16,
   },
-  openMapsBtnText: { color: BLACK, fontSize: 15, fontWeight: '700' },
+  ribbonCell:           { flex: 1, alignItems: 'center', justifyContent: 'center' },
+  ribbonBtn:            { alignItems: 'center', justifyContent: 'center' },
+  ribbonIconWrap:       { width: 30, height: 30, borderRadius: 8, justifyContent: 'center', alignItems: 'center' },
+  ribbonIconWrapActive: { backgroundColor: BLACK },
+  ribbonDivider:        { width: 1, height: 22 },
 
+  baseLocationPin: {
+    width: 30, height: 30, borderRadius: 15,
+    backgroundColor: BLACK, justifyContent: 'center', alignItems: 'center',
+    borderWidth: 2, borderColor: WHITE,
+    shadowColor: '#000', shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.3, shadowRadius: 4, elevation: 5,
+  },
+  liveDot: {
+    width: 14, height: 14, borderRadius: 7,
+    backgroundColor: '#34C759',
+    borderWidth: 2.5, borderColor: WHITE,
+    shadowColor: '#34C759', shadowOffset: { width: 0, height: 0 },
+    shadowOpacity: 0.7, shadowRadius: 6, elevation: 6,
+  },
   savedPin: {
     backgroundColor: WHITE, borderRadius: 20, width: 32, height: 32,
     justifyContent: 'center', alignItems: 'center',

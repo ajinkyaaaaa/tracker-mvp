@@ -17,6 +17,7 @@ from routes.admin import admin_bp
 from routes.saved_locations import saved_locations_bp
 from routes.sync import sync_bp
 from routes.settings import settings_bp
+from routes.bugs import bugs_bp
 
 load_dotenv()
 
@@ -37,6 +38,7 @@ app.register_blueprint(admin_bp,           url_prefix="/api/admin")
 app.register_blueprint(saved_locations_bp, url_prefix="/api/saved-locations")
 app.register_blueprint(sync_bp,            url_prefix="/api/sync")
 app.register_blueprint(settings_bp,        url_prefix="/api/settings")
+app.register_blueprint(bugs_bp,            url_prefix="/api/bugs")
 
 
 # ── Health check ──────────────────────────────────────────────────────────────

@@ -84,6 +84,18 @@ export const api = {
   getLoginDeadline:    ()         => request('/settings/login-deadline'),
   updateLoginDeadline: (deadline) => request('/settings/admin/login-deadline', { method: 'PUT', body: JSON.stringify({ login_deadline: deadline }) }),
 
+  // ── Bugs — routes/bugs.py ────────────────────────────────────────────────
+  // reportBug: consumed by ReportBugScreen.js → submit handler
+  // getBugReports: consumed by AdminBugReportsScreen.js on mount
+  // resolveBug: consumed by AdminBugReportsScreen.js → resolve action
+  reportBug:      (description) => request('/bugs/report',              { method: 'POST',  body: JSON.stringify({ description }) }),
+  getBugReports:  ()            => request('/bugs/'),
+  resolveBug:     (id)          => request(`/bugs/${id}/resolve`,        { method: 'PATCH' }),
+
+  // ── Auth extras — routes/auth.py ─────────────────────────────────────────
+  // changePassword: consumed by PasswordSecurityScreen.js → save handler
+  changePassword: (currentPassword, newPassword) => request('/auth/change-password', { method: 'POST', body: JSON.stringify({ currentPassword, newPassword }) }),
+
   // ── Saved Locations — routes/saved_locations.py ───────────────────────────
   // Consumed by MapScreen.js (mark / load pins; idle suppression uses the list too)
   saveLocation:        (data) => request('/saved-locations',        { method: 'POST',   body: JSON.stringify(data) }),
