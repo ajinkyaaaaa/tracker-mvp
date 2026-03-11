@@ -246,24 +246,25 @@ export default function SyncScreen({ navigation, route }) {
   return (
     <View style={styles.container}>
 
-      {/* ── Nav pill ── */}
+      {/* ── Nav Pill ── */}
       <Animated.View style={[styles.navPill, { opacity: navAnim }]}>
-        <View style={styles.navLeft}>
-          <TouchableOpacity onPress={() => navigation.navigate('Home')} style={styles.navItem}>
-            <Text style={styles.navInactive}>Home</Text>
-          </TouchableOpacity>
-          <View style={styles.navDivider} />
-          <TouchableOpacity onPress={() => navigation.navigate('Archive')} style={styles.navItem}>
-            <Text style={styles.navInactive}>Archive</Text>
-          </TouchableOpacity>
-          <View style={styles.navDivider} />
-          <View style={styles.navItem}>
-            <Text style={styles.navActive}>Sync</Text>
+        {/* Home */}
+        <TouchableOpacity style={styles.navTab} onPress={() => navigation.navigate('Home')} activeOpacity={0.75}>
+          <MaterialIcons name="near-me" size={22} color="rgba(255,255,255,0.50)" />
+        </TouchableOpacity>
+
+        {/* Archive */}
+        <TouchableOpacity style={styles.navTab} onPress={() => navigation.navigate('Archive')} activeOpacity={0.75}>
+          <MaterialIcons name="view-list" size={22} color="rgba(255,255,255,0.50)" />
+        </TouchableOpacity>
+
+        {/* Sync — active */}
+        <View style={styles.navTab}>
+          <View style={styles.navActiveCapsule}>
+            <MaterialIcons name="cloud-upload" size={15} color={BLACK} />
+            <Text style={styles.navActiveLabel}>Sync</Text>
           </View>
         </View>
-        <TouchableOpacity onPress={() => navigation.navigate('Calendar')}>
-          <Text style={styles.navHistory}>History</Text>
-        </TouchableOpacity>
       </Animated.View>
 
       <ScrollView
@@ -271,7 +272,12 @@ export default function SyncScreen({ navigation, route }) {
         contentContainerStyle={styles.scrollContent}
         showsVerticalScrollIndicator={false}
       >
-        <Text style={styles.dateHeader}>{displayDate}</Text>
+        <View style={styles.dateRow}>
+          <Text style={styles.dateHeader}>{displayDate}</Text>
+          <TouchableOpacity onPress={() => navigation.navigate('Calendar')} activeOpacity={0.7}>
+            <Text style={styles.historyLink}>Login History</Text>
+          </TouchableOpacity>
+        </View>
 
         {/* ── Travel Log ── */}
         <SyncSection label="Travel Log" status={locStatus} progress={locProgress} unsyncedCount={unsyncedLocs}>
@@ -379,24 +385,25 @@ const styles = StyleSheet.create({
 
   navPill: {
     position: 'absolute', top: 56, left: 16, right: 16, zIndex: 10,
-    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
-    backgroundColor: 'rgba(255,255,255,0.95)',
-    borderRadius: 32, paddingVertical: 11, paddingHorizontal: 16,
-    borderWidth: 1, borderColor: GRAY3,
-    shadowColor: '#000', shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.1, shadowRadius: 8, elevation: 6,
+    flexDirection: 'row', alignItems: 'center',
+    backgroundColor: 'rgba(0,0,0,0.92)', borderRadius: 100,
+    paddingVertical: 6, paddingHorizontal: 6,
+    shadowColor: '#000', shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.22, shadowRadius: 12, elevation: 8,
   },
-  navLeft:    { flexDirection: 'row', alignItems: 'center' },
-  navItem:    { paddingHorizontal: 10 },
-  navActive:  { color: BLACK, fontSize: 15, fontWeight: '800' },
-  navInactive:{ color: GRAY,  fontSize: 15, fontWeight: '600' },
-  navDivider: { width: 1, height: 14, backgroundColor: GRAY3 },
-  navHistory: { color: GRAY, fontSize: 13, fontWeight: '600', paddingHorizontal: 4 },
+  navTab:           { flex: 1, alignItems: 'center', justifyContent: 'center', paddingVertical: 2 },
+  navActiveCapsule: {
+    flexDirection: 'row', alignItems: 'center', gap: 6,
+    backgroundColor: WHITE, paddingHorizontal: 14, paddingVertical: 8, borderRadius: 100,
+  },
+  navActiveLabel: { color: BLACK, fontSize: 14, fontWeight: '700' },
 
   scroll:        { flex: 1 },
-  scrollContent: { paddingTop: 128, paddingHorizontal: 20, paddingBottom: 48 },
+  scrollContent: { paddingTop: 104, paddingHorizontal: 20, paddingBottom: 48 },
 
-  dateHeader: { color: BLACK, fontSize: 24, fontWeight: '900', marginBottom: 20 },
+  dateRow:     { flexDirection: 'row', alignItems: 'baseline', justifyContent: 'space-between', marginBottom: 20 },
+  dateHeader:  { color: BLACK, fontSize: 24, fontWeight: '900' },
+  historyLink: { color: GRAY, fontSize: 13, fontWeight: '600' },
 
   section: {
     backgroundColor: WHITE, borderRadius: 18, padding: 16, marginBottom: 14,

@@ -18,6 +18,7 @@ const GRAY  = '#6D6D72';
 const GRAY2 = '#C7C7CC';
 const GRAY3 = '#E5E5EA';
 const WHITE = '#FFFFFF';
+const RED   = '#FF3B30';
 
 // Single settings row — icon + label + optional right-side value + chevron
 function SettingsRow({ icon, label, value, onPress, last }) {
@@ -41,7 +42,7 @@ function SettingsRow({ icon, label, value, onPress, last }) {
 // Navigated to from MapScreen ribbon → settings icon
 // user from AuthContext; theme read from AsyncStorage
 export default function SettingsScreen({ navigation }) {
-  const { user } = useAuth();
+  const { user, logout } = useAuth();
   const [theme, setTheme] = useState('Light');
 
   // Load saved theme label on mount — set by ThemeScreen.js
@@ -103,6 +104,16 @@ export default function SettingsScreen({ navigation }) {
         <Text style={styles.sectionHeader}>SUPPORT</Text>
         <View style={styles.sectionCard}>
           <SettingsRow icon="bug-report" label="Report a Bug" onPress={() => navigation.navigate('ReportBug')} last />
+        </View>
+
+        {/* Logout */}
+        <View style={styles.sectionCard}>
+          <TouchableOpacity style={styles.row} onPress={logout} activeOpacity={0.7}>
+            <View style={styles.rowLeft}>
+              <MaterialIcons name="logout" size={20} color={RED} style={styles.rowIcon} />
+              <Text style={[styles.rowLabel, { color: RED }]}>Log Out</Text>
+            </View>
+          </TouchableOpacity>
         </View>
 
       </ScrollView>

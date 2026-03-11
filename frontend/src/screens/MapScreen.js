@@ -35,7 +35,6 @@ import {
   insertStop, insertClientVisit, getStopsByDate,
   insertLoginSession, getLoginSessionsByDateRange,
 } from '../services/localDatabase';
-import LoginCalendarModal from '../components/LoginCalendarModal';
 
 const { width } = Dimensions.get('window');
 
@@ -223,7 +222,6 @@ export default function MapScreen({ navigation }) {
   const [baseLocation,     setBaseLocation]     = useState(null);  // { name, icon, latitude, longitude, radius }
   const [homeLocation,     setHomeLocation]     = useState(null);  // { name, icon, latitude, longitude, radius }
   const [pendingCount,     setPendingCount]     = useState(0);
-  const [showLoginCal,     setShowLoginCal]     = useState(false);
   const [weekLoginMap,     setWeekLoginMap]     = useState({});
   const [loginDeadline,    setLoginDeadline]    = useState(LOGIN_DEADLINE_DEFAULT); // "HH:MM"
 
@@ -705,6 +703,10 @@ export default function MapScreen({ navigation }) {
   // Orbit button active state is always the inverse of the current UI base
   const orbitActiveBg   = isSat ? BLACK : WHITE;
   const orbitActiveIcon = isSat ? WHITE : BLACK;
+  // Nav pill: active capsule inverts against the pill background
+  const navCapsuleBg    = isSat ? BLACK                    : WHITE;
+  const navCapsuleText  = isSat ? WHITE                    : BLACK;
+  const navInactiveIcon = isSat ? 'rgba(0,0,0,0.38)'      : 'rgba(255,255,255,0.50)';
 
   return (
     <View style={styles.container}>
@@ -781,26 +783,27 @@ export default function MapScreen({ navigation }) {
         {path.length > 0 && <LiveLocationMarker coordinate={path[path.length - 1]} />}
       </MapView>
 
-      {/* ── Floating nav pill ── */}
-      <Animated.View style={[styles.navPill, { opacity: navAnim, backgroundColor: uiBg, borderColor: uiBorder }]}>
-        <View style={styles.navLeft}>
-          <Text style={[styles.navActive, { color: uiText }]}>Home</Text>
-          <View style={[styles.navDivider, { backgroundColor: uiDivider }]} />
-          <TouchableOpacity onPress={() => navigation.navigate('Archive')} style={styles.navArchiveBtn}>
-            <Text style={[styles.navInactive, { color: uiTextSub }]}>Archive</Text>
-            {pendingCount > 0 && (
-              <View style={styles.navBadge}>
-                <Text style={styles.navBadgeText}>{pendingCount}</Text>
-              </View>
-            )}
-          </TouchableOpacity>
-          <View style={[styles.navDivider, { backgroundColor: uiDivider }]} />
-          <TouchableOpacity onPress={() => navigation.navigate('Sync')}>
-            <Text style={[styles.navInactive, { color: uiTextSub }]}>Sync</Text>
-          </TouchableOpacity>
+      {/* ── Nav pill — dark capsule, active tab gets white inner pill ── */}
+      <Animated.View style={[styles.navPill, { opacity: navAnim, backgroundColor: uiBg }]}>
+        {/* Home — active */}
+        <View style={styles.navTab}>
+          <View style={[styles.navActiveCapsule, { backgroundColor: navCapsuleBg }]}>
+            <MaterialIcons name="near-me" size={15} color={navCapsuleText} />
+            <Text style={[styles.navActiveLabel, { color: navCapsuleText }]}>Home</Text>
+          </View>
         </View>
-        <TouchableOpacity onPress={handleLogout}>
-          <Text style={[styles.navLogout, { color: uiTextSub }]}>Logout</Text>
+
+        {/* Archive */}
+        <TouchableOpacity style={styles.navTab} onPress={() => navigation.navigate('Archive')} activeOpacity={0.75}>
+          <View style={styles.navTabIconWrap}>
+            <MaterialIcons name="view-list" size={22} color={navInactiveIcon} />
+            {pendingCount > 0 && <View style={styles.navDot} />}
+          </View>
+        </TouchableOpacity>
+
+        {/* Sync */}
+        <TouchableOpacity style={styles.navTab} onPress={() => navigation.navigate('Sync')} activeOpacity={0.75}>
+          <MaterialIcons name="cloud-upload" size={22} color={navInactiveIcon} />
         </TouchableOpacity>
       </Animated.View>
 
@@ -877,9 +880,6 @@ export default function MapScreen({ navigation }) {
                 });
               })}
             </View>
-            <TouchableOpacity style={[styles.infoBtn, { backgroundColor: uiCard, borderColor: uiBorder }]} onPress={() => setShowLoginCal(true)}>
-              <Text style={[styles.infoBtnText, { color: uiTextSub }]}>i</Text>
-            </TouchableOpacity>
           </View>
         </View>
 
@@ -970,8 +970,6 @@ export default function MapScreen({ navigation }) {
 
       </Animated.View>
 
-      {/* ── Login calendar modal ── */}
-      <LoginCalendarModal visible={showLoginCal} onClose={() => setShowLoginCal(false)} />
 
       {/* ── Mark Location Modal ── */}
       <Modal visible={markModalVisible} transparent animationType="slide">
@@ -1035,28 +1033,27 @@ const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: BG },
 
   navPill: {
-    position: 'absolute', top: 56, left: 16, right: 16,
-    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
-    borderRadius: 32, paddingVertical: 13, paddingHorizontal: 20,
-    borderWidth: 1,
-    shadowColor: '#000', shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.1, shadowRadius: 8, elevation: 6,
+    position: 'absolute', top: 56, left: 16, right: 16, zIndex: 10,
+    flexDirection: 'row', alignItems: 'center',
+    borderRadius: 100, paddingVertical: 6, paddingHorizontal: 6,
+    shadowColor: '#000', shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.22, shadowRadius: 12, elevation: 8,
   },
-  navLeft:       { flexDirection: 'row', alignItems: 'center', gap: 14 },
-  navActive:     { fontSize: 16, fontWeight: '800' },
-  navDivider:    { width: 1, height: 16 },
-  navArchiveBtn: { flexDirection: 'row', alignItems: 'center', gap: 6 },
-  navInactive:   { fontSize: 16, fontWeight: '600' },
-  navBadge: {
-    backgroundColor: '#FF3B30', borderRadius: 10,
-    minWidth: 20, height: 20, justifyContent: 'center', alignItems: 'center', paddingHorizontal: 5,
+  navTab:           { flex: 1, alignItems: 'center', justifyContent: 'center', paddingVertical: 2 },
+  navActiveCapsule: {
+    flexDirection: 'row', alignItems: 'center', gap: 6,
+    paddingHorizontal: 14, paddingVertical: 8, borderRadius: 100,
   },
-  navBadgeText: { color: WHITE, fontSize: 11, fontWeight: '800' },
-  navLogout:    { fontSize: 13, fontWeight: '600' },
+  navActiveLabel:   { fontSize: 14, fontWeight: '700' },
+  navTabIconWrap:   { position: 'relative' },
+  navDot: {
+    position: 'absolute', top: -2, right: -4,
+    width: 8, height: 8, borderRadius: 4, backgroundColor: '#FF3B30',
+  },
 
   // Login time widget — slim Apple-style pill below the nav pill
   loginWidget: {
-    position: 'absolute', top: 114, left: 16, right: 16,
+    position: 'absolute', top: 110, left: 16, right: 16,
     flexDirection: 'row', alignItems: 'center', gap: 14,
     borderRadius: 18, paddingVertical: 11, paddingHorizontal: 16,
     borderWidth: 1,
@@ -1102,12 +1099,6 @@ const styles = StyleSheet.create({
   },
   weekBoxToday: { borderWidth: 2 },
   weekBoxLabel: { fontSize: 9, fontWeight: '800' },
-  infoBtn: {
-    width: 26, height: 26, borderRadius: 13,
-    borderWidth: 1,
-    justifyContent: 'center', alignItems: 'center',
-  },
-  infoBtnText: { fontSize: 12, fontWeight: '700', fontStyle: 'italic' },
 
   orbitBtnWrap: { position: 'absolute', top: 186, right: 16 },
   orbitBtn: {

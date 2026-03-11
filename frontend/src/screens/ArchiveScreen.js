@@ -12,9 +12,9 @@ import {
   View, Text, StyleSheet, FlatList, RefreshControl,
   TouchableOpacity, Alert, Animated, LayoutAnimation, UIManager, Platform,
 } from 'react-native';
+import { MaterialIcons } from '@expo/vector-icons';
 import MapView, { Marker, PROVIDER_GOOGLE } from 'react-native-maps';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { useAuth } from '../contexts/AuthContext';
 import { getStopsByDate, respondToStop } from '../services/localDatabase';
 import StopResponseModal from '../components/StopResponseModal';
 
@@ -49,7 +49,6 @@ function ScalePress({ onPress, style, children, disabled }) {
 }
 
 export default function ArchiveScreen({ navigation }) {
-  const { logout } = useAuth();
   const [activities,       setActivities]      = useState([]);
   const [refreshing,       setRefreshing]       = useState(false);
   const [selectedActivity, setSelectedActivity] = useState(null);
@@ -191,27 +190,29 @@ export default function ArchiveScreen({ navigation }) {
   return (
     <View style={styles.container}>
 
-      {/* ── Floating Nav Pill ── */}
+      {/* ── Nav Pill ── */}
       <Animated.View style={[styles.navPill, { opacity: navAnim }]}>
-        <TouchableOpacity onPress={() => navigation.navigate('Home')} style={styles.navItem}>
-          <Text style={styles.navText}>Home</Text>
+        {/* Home */}
+        <TouchableOpacity style={styles.navTab} onPress={() => navigation.navigate('Home')} activeOpacity={0.75}>
+          <MaterialIcons name="near-me" size={22} color="rgba(255,255,255,0.50)" />
         </TouchableOpacity>
-        <View style={styles.navDivider} />
-        <View style={styles.navItem}>
-          <Text style={[styles.navText, styles.navTextActive]}>Archive</Text>
-          {pendingCount > 0 && (
-            <View style={styles.navBadge}>
-              <Text style={styles.navBadgeText}>{pendingCount}</Text>
-            </View>
-          )}
+
+        {/* Archive — active */}
+        <View style={styles.navTab}>
+          <View style={styles.navActiveCapsule}>
+            <MaterialIcons name="view-list" size={15} color={BLACK} />
+            <Text style={styles.navActiveLabel}>Archive</Text>
+            {pendingCount > 0 && (
+              <View style={styles.navBadge}>
+                <Text style={styles.navBadgeText}>{pendingCount}</Text>
+              </View>
+            )}
+          </View>
         </View>
-        <View style={styles.navDivider} />
-        <TouchableOpacity onPress={() => navigation.navigate('Sync')} style={styles.navItem}>
-          <Text style={styles.navText}>Sync</Text>
-        </TouchableOpacity>
-        <View style={styles.navDivider} />
-        <TouchableOpacity onPress={logout} style={styles.navItem}>
-          <Text style={styles.navText}>Logout</Text>
+
+        {/* Sync */}
+        <TouchableOpacity style={styles.navTab} onPress={() => navigation.navigate('Sync')} activeOpacity={0.75}>
+          <MaterialIcons name="cloud-upload" size={22} color="rgba(255,255,255,0.50)" />
         </TouchableOpacity>
       </Animated.View>
 
@@ -262,31 +263,29 @@ const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: BG },
 
   navPill: {
-    position: 'absolute',
-    top: 58, alignSelf: 'center',
+    position: 'absolute', top: 56, left: 16, right: 16, zIndex: 10,
     flexDirection: 'row', alignItems: 'center',
-    backgroundColor: 'rgba(255,255,255,0.95)',
-    borderRadius: 30, paddingVertical: 10, paddingHorizontal: 6,
-    borderWidth: 1, borderColor: GRAY3,
-    shadowColor: '#000', shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.1, shadowRadius: 8, elevation: 6,
-    zIndex: 10,
+    backgroundColor: 'rgba(0,0,0,0.92)', borderRadius: 100,
+    paddingVertical: 6, paddingHorizontal: 6,
+    shadowColor: '#000', shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.22, shadowRadius: 12, elevation: 8,
   },
-  navItem:       { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16, paddingVertical: 2 },
-  navText:       { color: GRAY,  fontSize: 15, fontWeight: '700' },
-  navTextActive: { color: BLACK },
-  navDivider:    { width: 1, height: 16, backgroundColor: GRAY3 },
+  navTab:           { flex: 1, alignItems: 'center', justifyContent: 'center', paddingVertical: 2 },
+  navActiveCapsule: {
+    flexDirection: 'row', alignItems: 'center', gap: 6,
+    backgroundColor: WHITE, paddingHorizontal: 14, paddingVertical: 8, borderRadius: 100,
+  },
+  navActiveLabel: { color: BLACK, fontSize: 14, fontWeight: '700' },
   navBadge: {
     backgroundColor: RED, borderRadius: 8,
     minWidth: 16, height: 16, paddingHorizontal: 4,
     justifyContent: 'center', alignItems: 'center',
-    marginLeft: 5,
   },
   navBadgeText: { color: WHITE, fontSize: 10, fontWeight: '900' },
 
   sectionHeader: {
     flexDirection: 'row', alignItems: 'center',
-    marginTop: 132, paddingHorizontal: 24, marginBottom: 8,
+    marginTop: 104, paddingHorizontal: 24, marginBottom: 8,
   },
   sectionTitle: { color: BLACK, fontSize: 22, fontWeight: '900', flex: 1 },
   pendingPill: {
