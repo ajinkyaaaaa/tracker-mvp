@@ -15,17 +15,9 @@ import {
 } from 'react-native';
 import * as Location from 'expo-location';
 import { useAuth } from '../contexts/AuthContext';
+import { useTheme } from '../contexts/ThemeContext';
 
 const { height } = Dimensions.get('window');
-
-// Black & white palette
-const BG    = '#FFFFFF';
-const CARD  = '#F2F2F7';
-const BLACK = '#000000';
-const GRAY  = '#6D6D72';
-const GRAY2 = '#C7C7CC';
-const GRAY3 = '#E5E5EA';
-const WHITE = '#FFFFFF';
 
 function ScalePress({ onPress, style, children, disabled }) {
   const scale = useRef(new Animated.Value(1)).current;
@@ -44,6 +36,8 @@ function ScalePress({ onPress, style, children, disabled }) {
 
 export default function LoginScreen() {
   const { login, register } = useAuth();
+  const { BG, CARD, BLACK, GRAY, GRAY2, GRAY3, WHITE } = useTheme();
+  const styles = makeStyles({ BG, CARD, BLACK, GRAY, GRAY2, GRAY3, WHITE });
   const [isRegister, setIsRegister] = useState(false);
   const [name,       setName]       = useState('');
   const [email,      setEmail]      = useState('');
@@ -207,67 +201,69 @@ export default function LoginScreen() {
   );
 }
 
-const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: BG, justifyContent: 'flex-end' },
+function makeStyles({ BG, CARD, BLACK, GRAY, GRAY2, GRAY3, WHITE }) {
+  return StyleSheet.create({
+    container: { flex: 1, backgroundColor: BG, justifyContent: 'flex-end' },
 
-  // Logo
-  logoBlock: {
-    alignItems: 'center',
-    paddingTop: 60,
-    paddingBottom: 40,
-    flex: 1,
-    justifyContent: 'center',
-  },
-  logoCircle: {
-    width: 72, height: 72, borderRadius: 22,
-    backgroundColor: BLACK,
-    justifyContent: 'center', alignItems: 'center',
-    marginBottom: 20,
-    shadowColor: '#000', shadowOffset: { width: 0, height: 6 },
-    shadowOpacity: 0.18, shadowRadius: 16, elevation: 8,
-  },
-  logoEmoji: { fontSize: 32 },
-  appName:   { color: BLACK, fontSize: 28, fontWeight: '900', letterSpacing: 0.3 },
-  tagline:   { color: GRAY,  fontSize: 14, marginTop: 6 },
+    // Logo
+    logoBlock: {
+      alignItems: 'center',
+      paddingTop: 60,
+      paddingBottom: 40,
+      flex: 1,
+      justifyContent: 'center',
+    },
+    logoCircle: {
+      width: 72, height: 72, borderRadius: 22,
+      backgroundColor: BLACK,
+      justifyContent: 'center', alignItems: 'center',
+      marginBottom: 20,
+      shadowColor: '#000', shadowOffset: { width: 0, height: 6 },
+      shadowOpacity: 0.18, shadowRadius: 16, elevation: 8,
+    },
+    logoEmoji: { fontSize: 32 },
+    appName:   { color: BLACK, fontSize: 28, fontWeight: '900', letterSpacing: 0.3 },
+    tagline:   { color: GRAY,  fontSize: 14, marginTop: 6 },
 
-  // Card
-  card: {
-    backgroundColor: WHITE,
-    borderTopLeftRadius: 32, borderTopRightRadius: 32,
-    paddingHorizontal: 28, paddingTop: 32, paddingBottom: 40,
-    maxHeight: height * 0.62,
-    borderTopWidth: 1,
-    borderColor: GRAY3,
-    shadowColor: '#000', shadowOffset: { width: 0, height: -4 },
-    shadowOpacity: 0.06, shadowRadius: 16, elevation: 10,
-  },
-  cardTitle: { color: BLACK, fontSize: 24, fontWeight: '800', marginBottom: 4 },
-  cardSub:   { color: GRAY,  fontSize: 14, marginBottom: 26 },
+    // Card
+    card: {
+      backgroundColor: WHITE,
+      borderTopLeftRadius: 32, borderTopRightRadius: 32,
+      paddingHorizontal: 28, paddingTop: 32, paddingBottom: 40,
+      maxHeight: height * 0.62,
+      borderTopWidth: 1,
+      borderColor: GRAY3,
+      shadowColor: '#000', shadowOffset: { width: 0, height: -4 },
+      shadowOpacity: 0.06, shadowRadius: 16, elevation: 10,
+    },
+    cardTitle: { color: BLACK, fontSize: 24, fontWeight: '800', marginBottom: 4 },
+    cardSub:   { color: GRAY,  fontSize: 14, marginBottom: 26 },
 
-  field:      { marginBottom: 18 },
-  fieldLabel: { color: BLACK, fontSize: 11, fontWeight: '800', letterSpacing: 1.2, marginBottom: 8 },
-  input: {
-    backgroundColor: CARD,
-    borderRadius: 14, padding: 16,
-    color: BLACK, fontSize: 15,
-    borderWidth: 1, borderColor: GRAY3,
-  },
+    field:      { marginBottom: 18 },
+    fieldLabel: { color: BLACK, fontSize: 11, fontWeight: '800', letterSpacing: 1.2, marginBottom: 8 },
+    input: {
+      backgroundColor: CARD,
+      borderRadius: 14, padding: 16,
+      color: BLACK, fontSize: 15,
+      borderWidth: 1, borderColor: GRAY3,
+    },
 
-  roleRow:        { flexDirection: 'row', gap: 10 },
-  roleBtn:        { flex: 1, padding: 13, borderRadius: 12, borderWidth: 1, borderColor: GRAY3, alignItems: 'center', backgroundColor: CARD },
-  roleBtnActive:  { backgroundColor: BLACK, borderColor: BLACK },
-  roleText:       { color: GRAY,  fontWeight: '700', fontSize: 14 },
-  roleTextActive: { color: WHITE },
+    roleRow:        { flexDirection: 'row', gap: 10 },
+    roleBtn:        { flex: 1, padding: 13, borderRadius: 12, borderWidth: 1, borderColor: GRAY3, alignItems: 'center', backgroundColor: CARD },
+    roleBtnActive:  { backgroundColor: BLACK, borderColor: BLACK },
+    roleText:       { color: GRAY,  fontWeight: '700', fontSize: 14 },
+    roleTextActive: { color: WHITE },
 
-  btn: {
-    backgroundColor: BLACK, borderRadius: 18, padding: 18,
-    alignItems: 'center', marginTop: 10,
-    shadowColor: '#000', shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.15, shadowRadius: 10, elevation: 5,
-  },
-  btnText: { color: WHITE, fontSize: 17, fontWeight: '900', letterSpacing: 0.4 },
+    btn: {
+      backgroundColor: BLACK, borderRadius: 18, padding: 18,
+      alignItems: 'center', marginTop: 10,
+      shadowColor: '#000', shadowOffset: { width: 0, height: 4 },
+      shadowOpacity: 0.15, shadowRadius: 10, elevation: 5,
+    },
+    btnText: { color: WHITE, fontSize: 17, fontWeight: '900', letterSpacing: 0.4 },
 
-  switchRow:  { alignItems: 'center', marginTop: 20, paddingBottom: 10 },
-  switchText: { color: GRAY, fontSize: 14 },
-  switchLink: { color: BLACK, fontWeight: '800' },
-});
+    switchRow:  { alignItems: 'center', marginTop: 20, paddingBottom: 10 },
+    switchText: { color: GRAY, fontSize: 14 },
+    switchLink: { color: BLACK, fontWeight: '800' },
+  });
+}

@@ -23,21 +23,16 @@ import { io } from 'socket.io-client';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { api, BASE_URL } from '../services/api';
 import { useAuth } from '../contexts/AuthContext';
+import { useTheme } from '../contexts/ThemeContext';
 
 const SOCKET_URL = BASE_URL.replace('/api', '');
 
-// Black & white palette
-const BG    = '#FFFFFF';
-const CARD  = '#F2F2F7';
-const BLACK = '#000000';
-const GRAY  = '#6D6D72';
-const GRAY2 = '#C7C7CC';
-const GRAY3 = '#E5E5EA';
-const WHITE = '#FFFFFF';
 const RED   = '#FF3B30';
 
 export default function AdminDashboardScreen() {
   const { logout } = useAuth();
+  const { BG, CARD, BLACK, GRAY, GRAY2, GRAY3, WHITE } = useTheme();
+  const styles = makeStyles({ BG, CARD, BLACK, GRAY, GRAY2, GRAY3, WHITE });
   const [tab,               setTab]               = useState('live');
   const [liveEmployees,     setLiveEmployees]     = useState([]);
   const [employees,         setEmployees]         = useState([]);
@@ -272,122 +267,124 @@ export default function AdminDashboardScreen() {
   );
 }
 
-const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: BG },
+function makeStyles({ BG, CARD, BLACK, GRAY, GRAY2, GRAY3, WHITE }) {
+  return StyleSheet.create({
+    container: { flex: 1, backgroundColor: BG },
 
-  tabBar: {
-    flexDirection: 'row',
-    paddingTop: 60,
-    paddingHorizontal: 16,
-    paddingBottom: 12,
-    gap: 8,
-    alignItems: 'center',
-    backgroundColor: WHITE,
-    borderBottomWidth: 1,
-    borderBottomColor: GRAY3,
-  },
-  tab: {
-    paddingHorizontal: 18,
-    paddingVertical: 9,
-    borderRadius: 10,
-    backgroundColor: CARD,
-  },
-  tabActive:     { backgroundColor: BLACK },
-  tabText:       { color: GRAY,  fontWeight: '700', fontSize: 14 },
-  tabTextActive: { color: WHITE },
+    tabBar: {
+      flexDirection: 'row',
+      paddingTop: 60,
+      paddingHorizontal: 16,
+      paddingBottom: 12,
+      gap: 8,
+      alignItems: 'center',
+      backgroundColor: WHITE,
+      borderBottomWidth: 1,
+      borderBottomColor: GRAY3,
+    },
+    tab: {
+      paddingHorizontal: 18,
+      paddingVertical: 9,
+      borderRadius: 10,
+      backgroundColor: CARD,
+    },
+    tabActive:     { backgroundColor: BLACK },
+    tabText:       { color: GRAY,  fontWeight: '700', fontSize: 14 },
+    tabTextActive: { color: WHITE },
 
-  logoutBtn:     { marginLeft: 'auto' },
-  logoutBtnText: { color: RED, fontSize: 13, fontWeight: '700' },
+    logoutBtn:     { marginLeft: 'auto' },
+    logoutBtnText: { color: RED, fontSize: 13, fontWeight: '700' },
 
-  content: { flex: 1 },
-  map:     { flex: 1 },
+    content: { flex: 1 },
+    map:     { flex: 1 },
 
-  onlineCount: {
-    position: 'absolute',
-    top: 12, right: 16,
-    backgroundColor: 'rgba(255,255,255,0.95)',
-    borderRadius: 10,
-    paddingHorizontal: 14, paddingVertical: 8,
-    borderWidth: 1, borderColor: GRAY3,
-    shadowColor: '#000', shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.1, shadowRadius: 6, elevation: 4,
-  },
-  onlineCountText: { color: BLACK, fontWeight: '700', fontSize: 14 },
+    onlineCount: {
+      position: 'absolute',
+      top: 12, right: 16,
+      backgroundColor: 'rgba(255,255,255,0.95)',
+      borderRadius: 10,
+      paddingHorizontal: 14, paddingVertical: 8,
+      borderWidth: 1, borderColor: GRAY3,
+      shadowColor: '#000', shadowOffset: { width: 0, height: 2 },
+      shadowOpacity: 0.1, shadowRadius: 6, elevation: 4,
+    },
+    onlineCountText: { color: BLACK, fontWeight: '700', fontSize: 14 },
 
-  selectorBar: {
-    paddingHorizontal: 12,
-    paddingVertical: 10,
-    backgroundColor: WHITE,
-    borderBottomWidth: 1,
-    borderBottomColor: GRAY3,
-  },
-  empChip: {
-    paddingHorizontal: 16,
-    paddingVertical: 8,
-    borderRadius: 20,
-    backgroundColor: CARD,
-    marginRight: 8,
-    borderWidth: 1,
-    borderColor: GRAY3,
-  },
-  empChipActive:     { backgroundColor: BLACK, borderColor: BLACK },
-  empChipText:       { color: GRAY,  fontWeight: '600', fontSize: 14 },
-  empChipTextActive: { color: WHITE },
+    selectorBar: {
+      paddingHorizontal: 12,
+      paddingVertical: 10,
+      backgroundColor: WHITE,
+      borderBottomWidth: 1,
+      borderBottomColor: GRAY3,
+    },
+    empChip: {
+      paddingHorizontal: 16,
+      paddingVertical: 8,
+      borderRadius: 20,
+      backgroundColor: CARD,
+      marginRight: 8,
+      borderWidth: 1,
+      borderColor: GRAY3,
+    },
+    empChipActive:     { backgroundColor: BLACK, borderColor: BLACK },
+    empChipText:       { color: GRAY,  fontWeight: '600', fontSize: 14 },
+    empChipTextActive: { color: WHITE },
 
-  dateBar: {
-    flexDirection: 'row',
-    paddingHorizontal: 12,
-    paddingVertical: 10,
-    gap: 8,
-    backgroundColor: WHITE,
-    borderBottomWidth: 1,
-    borderBottomColor: GRAY3,
-  },
-  dateInput: {
-    flex: 1,
-    backgroundColor: CARD,
-    borderRadius: 10,
-    paddingHorizontal: 14, paddingVertical: 10,
-    color: BLACK, fontSize: 14,
-    borderWidth: 1, borderColor: GRAY3,
-  },
-  loadBtn: {
-    backgroundColor: BLACK,
-    borderRadius: 10,
-    paddingHorizontal: 20,
-    justifyContent: 'center',
-  },
-  loadBtnText: { color: WHITE, fontWeight: '700', fontSize: 14 },
+    dateBar: {
+      flexDirection: 'row',
+      paddingHorizontal: 12,
+      paddingVertical: 10,
+      gap: 8,
+      backgroundColor: WHITE,
+      borderBottomWidth: 1,
+      borderBottomColor: GRAY3,
+    },
+    dateInput: {
+      flex: 1,
+      backgroundColor: CARD,
+      borderRadius: 10,
+      paddingHorizontal: 14, paddingVertical: 10,
+      color: BLACK, fontSize: 14,
+      borderWidth: 1, borderColor: GRAY3,
+    },
+    loadBtn: {
+      backgroundColor: BLACK,
+      borderRadius: 10,
+      paddingHorizontal: 20,
+      justifyContent: 'center',
+    },
+    loadBtnText: { color: WHITE, fontWeight: '700', fontSize: 14 },
 
-  settingsPanel: {
-    flex: 1, backgroundColor: BG,
-    paddingHorizontal: 20, paddingTop: 28,
-  },
-  settingsTitle: { color: BLACK, fontSize: 20, fontWeight: '900', marginBottom: 28 },
-  settingRow: {
-    backgroundColor: WHITE,
-    borderRadius: 16, padding: 18,
-    borderWidth: 1, borderColor: GRAY3,
-    gap: 16,
-    shadowColor: '#000', shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.05, shadowRadius: 4, elevation: 2,
-  },
-  settingInfo:  {},
-  settingLabel: { color: GRAY, fontSize: 10, fontWeight: '700', letterSpacing: 1.2, textTransform: 'uppercase', marginBottom: 6 },
-  settingDesc:  { color: GRAY, fontSize: 13, lineHeight: 18 },
-  settingControl: { flexDirection: 'row', alignItems: 'center', gap: 10 },
-  timeInput: {
-    flex: 1,
-    backgroundColor: CARD, borderRadius: 10,
-    paddingHorizontal: 14, paddingVertical: 12,
-    color: BLACK, fontSize: 22, fontWeight: '800',
-    borderWidth: 1, borderColor: GRAY3,
-    letterSpacing: 1,
-  },
-  saveBtn: {
-    backgroundColor: BLACK, borderRadius: 10,
-    paddingHorizontal: 22, paddingVertical: 12,
-  },
-  saveBtnDisabled: { backgroundColor: GRAY2 },
-  saveBtnText: { color: WHITE, fontWeight: '700', fontSize: 14 },
-});
+    settingsPanel: {
+      flex: 1, backgroundColor: BG,
+      paddingHorizontal: 20, paddingTop: 28,
+    },
+    settingsTitle: { color: BLACK, fontSize: 20, fontWeight: '900', marginBottom: 28 },
+    settingRow: {
+      backgroundColor: WHITE,
+      borderRadius: 16, padding: 18,
+      borderWidth: 1, borderColor: GRAY3,
+      gap: 16,
+      shadowColor: '#000', shadowOffset: { width: 0, height: 1 },
+      shadowOpacity: 0.05, shadowRadius: 4, elevation: 2,
+    },
+    settingInfo:  {},
+    settingLabel: { color: GRAY, fontSize: 10, fontWeight: '700', letterSpacing: 1.2, textTransform: 'uppercase', marginBottom: 6 },
+    settingDesc:  { color: GRAY, fontSize: 13, lineHeight: 18 },
+    settingControl: { flexDirection: 'row', alignItems: 'center', gap: 10 },
+    timeInput: {
+      flex: 1,
+      backgroundColor: CARD, borderRadius: 10,
+      paddingHorizontal: 14, paddingVertical: 12,
+      color: BLACK, fontSize: 22, fontWeight: '800',
+      borderWidth: 1, borderColor: GRAY3,
+      letterSpacing: 1,
+    },
+    saveBtn: {
+      backgroundColor: BLACK, borderRadius: 10,
+      paddingHorizontal: 22, paddingVertical: 12,
+    },
+    saveBtnDisabled: { backgroundColor: GRAY2 },
+    saveBtnText: { color: WHITE, fontWeight: '700', fontSize: 14 },
+  });
+}

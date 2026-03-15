@@ -1,20 +1,10 @@
 // settings/ThemeScreen.js — App theme selection (Light / Dark)
 // Navigated to from SettingsScreen.js → Theme row
-// Saves preference to AsyncStorage key 'app_theme'; SettingsScreen reads it on focus
-// Full theme switching will be wired to a ThemeContext in a future update
+// Calls useTheme().setTheme() → updates ThemeContext (ThemeContext.js) + writes AsyncStorage 'app_theme'
 
-import { useState, useEffect }                           from 'react';
-import { View, Text, TouchableOpacity, StyleSheet,
-         SafeAreaView }                                  from 'react-native';
-import AsyncStorage                                      from '@react-native-async-storage/async-storage';
-import { MaterialIcons }                                 from '@expo/vector-icons';
-
-const BG    = '#FFFFFF';
-const CARD  = '#F2F2F7';
-const BLACK = '#000000';
-const GRAY  = '#6D6D72';
-const GRAY2 = '#C7C7CC';
-const GRAY3 = '#E5E5EA';
+import { View, Text, TouchableOpacity, StyleSheet, SafeAreaView } from 'react-native';
+import { MaterialIcons }                                           from '@expo/vector-icons';
+import { useTheme }                                               from '../../contexts/ThemeContext';
 
 const THEMES = [
   { key: 'light', label: 'Light', icon: 'light-mode' },
@@ -23,16 +13,9 @@ const THEMES = [
 
 // Navigated to from SettingsScreen.js → Theme row
 export default function ThemeScreen({ navigation }) {
-  const [selected, setSelected] = useState('light');
-
-  useEffect(() => {
-    AsyncStorage.getItem('app_theme').then(v => { if (v) setSelected(v); });
-  }, []);
-
-  async function handleSelect(key) {
-    setSelected(key);
-    await AsyncStorage.setItem('app_theme', key);
-  }
+  const { isDark, setTheme, BG, CARD, BLACK, GRAY, GRAY3 } = useTheme();
+  const selected = isDark ? 'dark' : 'light';
+  const styles = makeStyles({ BG, CARD, BLACK, GRAY, GRAY3 });
 
   return (
     <SafeAreaView style={styles.safe}>
@@ -49,7 +32,7 @@ export default function ThemeScreen({ navigation }) {
         <View style={styles.sectionCard}>
           {THEMES.map((theme, i) => (
             <View key={theme.key}>
-              <TouchableOpacity style={styles.row} onPress={() => handleSelect(theme.key)} activeOpacity={0.7}>
+              <TouchableOpacity style={styles.row} onPress={() => setTheme(theme.key)} activeOpacity={0.7}>
                 <View style={styles.rowLeft}>
                   <MaterialIcons name={theme.icon} size={20} color={BLACK} />
                   <Text style={styles.rowLabel}>{theme.label}</Text>
@@ -67,27 +50,29 @@ export default function ThemeScreen({ navigation }) {
   );
 }
 
-const styles = StyleSheet.create({
-  safe:   { flex: 1, backgroundColor: BG },
-  header: {
-    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
-    paddingHorizontal: 16, paddingVertical: 14,
-    borderBottomWidth: 1, borderBottomColor: GRAY3,
-  },
-  backBtn:     { width: 36, alignItems: 'flex-start' },
-  headerTitle: { color: BLACK, fontSize: 17, fontWeight: '700' },
+function makeStyles({ BG, CARD, BLACK, GRAY, GRAY3 }) {
+  return StyleSheet.create({
+    safe:   { flex: 1, backgroundColor: BG },
+    header: {
+      flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
+      paddingHorizontal: 16, paddingVertical: 14,
+      borderBottomWidth: 1, borderBottomColor: GRAY3,
+    },
+    backBtn:     { width: 36, alignItems: 'flex-start' },
+    headerTitle: { color: BLACK, fontSize: 17, fontWeight: '700' },
 
-  scroll: { paddingHorizontal: 16, paddingTop: 28 },
-  sectionHeader: {
-    color: GRAY, fontSize: 11, fontWeight: '700', letterSpacing: 1.1,
-    marginBottom: 8, marginLeft: 4,
-  },
-  sectionCard: { backgroundColor: CARD, borderRadius: 14, overflow: 'hidden' },
-  row: {
-    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
-    paddingVertical: 15, paddingHorizontal: 16,
-  },
-  rowLeft:  { flexDirection: 'row', alignItems: 'center', gap: 12 },
-  rowLabel: { color: BLACK, fontSize: 15, fontWeight: '500' },
-  divider:  { height: 1, backgroundColor: GRAY3, marginLeft: 48 },
-});
+    scroll: { paddingHorizontal: 16, paddingTop: 28 },
+    sectionHeader: {
+      color: GRAY, fontSize: 11, fontWeight: '700', letterSpacing: 1.1,
+      marginBottom: 8, marginLeft: 4,
+    },
+    sectionCard: { backgroundColor: CARD, borderRadius: 14, overflow: 'hidden' },
+    row: {
+      flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
+      paddingVertical: 15, paddingHorizontal: 16,
+    },
+    rowLeft:  { flexDirection: 'row', alignItems: 'center', gap: 12 },
+    rowLabel: { color: BLACK, fontSize: 15, fontWeight: '500' },
+    divider:  { height: 1, backgroundColor: GRAY3, marginLeft: 48 },
+  });
+}

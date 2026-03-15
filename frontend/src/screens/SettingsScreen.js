@@ -4,24 +4,18 @@
 //           Preferences (Theme)
 //           Support (Report a Bug)
 
-import { useEffect, useState }                             from 'react';
 import { View, Text, ScrollView, TouchableOpacity,
          StyleSheet, SafeAreaView }                        from 'react-native';
-import AsyncStorage                                        from '@react-native-async-storage/async-storage';
 import { MaterialIcons }                                   from '@expo/vector-icons';
 import { useAuth }                                         from '../contexts/AuthContext';
+import { useTheme }                                        from '../contexts/ThemeContext';
 
-const BG    = '#FFFFFF';
-const CARD  = '#F2F2F7';
-const BLACK = '#000000';
-const GRAY  = '#6D6D72';
-const GRAY2 = '#C7C7CC';
-const GRAY3 = '#E5E5EA';
-const WHITE = '#FFFFFF';
-const RED   = '#FF3B30';
+const RED = '#FF3B30';
 
 // Single settings row — icon + label + optional right-side value + chevron
 function SettingsRow({ icon, label, value, onPress, last }) {
+  const { BLACK, GRAY2 } = useTheme();
+  const styles = makeStyles(useTheme());
   return (
     <>
       <TouchableOpacity style={styles.row} onPress={onPress} activeOpacity={0.7}>
@@ -40,26 +34,14 @@ function SettingsRow({ icon, label, value, onPress, last }) {
 }
 
 // Navigated to from MapScreen ribbon → settings icon
-// user from AuthContext; theme read from AsyncStorage
+// user from AuthContext; theme from ThemeContext.js
 export default function SettingsScreen({ navigation }) {
   const { user, logout } = useAuth();
-  const [theme, setTheme] = useState('Light');
+  const { isDark, BG, CARD, BLACK, GRAY, GRAY2, GRAY3, WHITE } = useTheme();
+  const styles = makeStyles({ BG, CARD, BLACK, GRAY, GRAY2, GRAY3, WHITE });
 
-  // Load saved theme label on mount — set by ThemeScreen.js
-  useEffect(() => {
-    AsyncStorage.getItem('app_theme').then(v => { if (v) setTheme(v === 'dark' ? 'Dark' : 'Light'); });
-  }, []);
-
-  // Refresh theme value when returning from ThemeScreen
-  useEffect(() => {
-    const unsub = navigation.addListener('focus', () => {
-      AsyncStorage.getItem('app_theme').then(v => { if (v) setTheme(v === 'dark' ? 'Dark' : 'Light'); });
-    });
-    return unsub;
-  }, [navigation]);
-
-  const initials   = (user?.name || 'U').split(' ').map(w => w[0]).join('').toUpperCase().slice(0, 2);
-  const empCode    = `EMP-${String(user?.id || 0).padStart(3, '0')}`;
+  const initials = (user?.name || 'U').split(' ').map(w => w[0]).join('').toUpperCase().slice(0, 2);
+  const empCode  = `EMP-${String(user?.id || 0).padStart(3, '0')}`;
 
   return (
     <SafeAreaView style={styles.safe}>
@@ -97,7 +79,7 @@ export default function SettingsScreen({ navigation }) {
         {/* Preferences */}
         <Text style={styles.sectionHeader}>PREFERENCES</Text>
         <View style={styles.sectionCard}>
-          <SettingsRow icon="brightness-6" label="Theme" value={theme} onPress={() => navigation.navigate('ThemeSettings')} last />
+          <SettingsRow icon="brightness-6" label="Theme" value={isDark ? 'Dark' : 'Light'} onPress={() => navigation.navigate('ThemeSettings')} last />
         </View>
 
         {/* Support */}
@@ -121,7 +103,8 @@ export default function SettingsScreen({ navigation }) {
   );
 }
 
-const styles = StyleSheet.create({
+function makeStyles({ BG, CARD, BLACK, GRAY, GRAY2, GRAY3, WHITE }) {
+  return StyleSheet.create({
   safe:   { flex: 1, backgroundColor: BG },
   header: {
     flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
@@ -168,4 +151,5 @@ const styles = StyleSheet.create({
   rowRight:   { flexDirection: 'row', alignItems: 'center', gap: 4 },
   rowValue:   { color: GRAY, fontSize: 14 },
   rowDivider: { height: 1, backgroundColor: GRAY3, marginLeft: 48 },
-});
+  });
+}

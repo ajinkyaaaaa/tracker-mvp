@@ -3,7 +3,7 @@
 // Calls initLocalDB() before rendering navigation to ensure the local SQLite DB is ready.
 // AppNavigator reads the user's role to decide which screen stack to show:
 //   No user  → LoginScreen
-//   Employee → EmployeeRoot (EmployeeTabs + CalendarScreen + Settings screens pushed on top)
+//   Employee → EmployeeRoot (EmployeeTabs + CalendarScreen + DayLogScreen + Settings screens pushed on top)
 //   Admin    → AdminRoot (AdminDashboardScreen + AdminBugReportsScreen)
 
 import { useState, useEffect }             from 'react';
@@ -13,12 +13,14 @@ import { createNativeStackNavigator }       from '@react-navigation/native-stack
 import { createBottomTabNavigator }         from '@react-navigation/bottom-tabs';
 import { ActivityIndicator, View }          from 'react-native';
 import { AuthProvider, useAuth }            from './src/contexts/AuthContext';
+import { ThemeProvider, useTheme }          from './src/contexts/ThemeContext';
 import { initLocalDB }                      from './src/services/localDatabase';
 import LoginScreen               from './src/screens/LoginScreen';
 import MapScreen                 from './src/screens/MapScreen';
 import ArchiveScreen             from './src/screens/ArchiveScreen';
 import SyncScreen                from './src/screens/SyncScreen';
 import CalendarScreen            from './src/screens/CalendarScreen';
+import DayLogScreen              from './src/screens/DayLogScreen';
 import AdminDashboardScreen      from './src/screens/AdminDashboardScreen';
 import AdminBugReportsScreen     from './src/screens/AdminBugReportsScreen';
 import SettingsScreen            from './src/screens/SettingsScreen';
@@ -53,6 +55,7 @@ function EmployeeRoot() {
     <EmployeeStack.Navigator screenOptions={{ headerShown: false }}>
       <EmployeeStack.Screen name="EmployeeTabs"         component={EmployeeTabs} />
       <EmployeeStack.Screen name="Calendar"             component={CalendarScreen} />
+      <EmployeeStack.Screen name="DayLog"              component={DayLogScreen} />
       <EmployeeStack.Screen name="Settings"             component={SettingsScreen} />
       <EmployeeStack.Screen name="ManageProfile"        component={ManageProfileScreen} />
       <EmployeeStack.Screen name="BaseLocationPin"      component={BaseLocationPinScreen} />
@@ -79,6 +82,7 @@ function AdminRoot() {
 // or while the local SQLite database is initialising (dbReady).
 function AppNavigator() {
   const { user, loading } = useAuth();
+  const { isDark } = useTheme();
   const [dbReady, setDbReady] = useState(false);
 
   // Initialise local SQLite DB once on mount; unblock rendering when done.
@@ -97,7 +101,9 @@ function AppNavigator() {
   }
 
   return (
-    <Stack.Navigator screenOptions={{ headerShown: false }}>
+    <>
+      <StatusBar style={isDark ? 'light' : 'dark'} />
+      <Stack.Navigator screenOptions={{ headerShown: false }}>
       {!user ? (
         <Stack.Screen name="Login"    component={LoginScreen} />
       ) : user.role === 'admin' ? (
@@ -106,16 +112,18 @@ function AppNavigator() {
         <Stack.Screen name="Employee" component={EmployeeRoot} />
       )}
     </Stack.Navigator>
+    </>
   );
 }
 
 export default function App() {
   return (
-    <AuthProvider>
-      <NavigationContainer>
-        <StatusBar style="dark" />
-        <AppNavigator />
-      </NavigationContainer>
-    </AuthProvider>
+    <ThemeProvider>
+      <AuthProvider>
+        <NavigationContainer>
+          <AppNavigator />
+        </NavigationContainer>
+      </AuthProvider>
+    </ThemeProvider>
   );
 }

@@ -8,18 +8,14 @@ import { View, Text, TextInput, TouchableOpacity, StyleSheet,
          Platform, ScrollView }                               from 'react-native';
 import { MaterialIcons }                                      from '@expo/vector-icons';
 import { api }                                                from '../../services/api';
+import { useTheme }                                           from '../../contexts/ThemeContext';
 
-const BG    = '#FFFFFF';
-const CARD  = '#F2F2F7';
-const BLACK = '#000000';
-const GRAY  = '#6D6D72';
-const GRAY2 = '#C7C7CC';
-const GRAY3 = '#E5E5EA';
-const WHITE = '#FFFFFF';
 const RED   = '#FF3B30';
 
 // Password input with show/hide toggle
 function PasswordField({ label, value, onChangeText }) {
+  const { GRAY, GRAY2 } = useTheme();
+  const styles = makeStyles(useTheme());
   const [visible, setVisible] = useState(false);
   return (
     <View style={styles.field}>
@@ -44,6 +40,9 @@ function PasswordField({ label, value, onChangeText }) {
 
 // Navigated to from SettingsScreen.js → Password & Security row
 export default function PasswordSecurityScreen({ navigation }) {
+  const { BG, CARD, BLACK, GRAY, GRAY2, GRAY3, WHITE } = useTheme();
+  const styles = makeStyles({ BG, CARD, BLACK, GRAY, GRAY2, GRAY3, WHITE });
+
   const [current,  setCurrent]  = useState('');
   const [newPw,    setNewPw]    = useState('');
   const [confirm,  setConfirm]  = useState('');
@@ -102,7 +101,7 @@ export default function PasswordSecurityScreen({ navigation }) {
   );
 }
 
-const styles = StyleSheet.create({
+function makeStyles({ BG, CARD, BLACK, GRAY, GRAY2, GRAY3, WHITE }) { return StyleSheet.create({
   safe:   { flex: 1, backgroundColor: BG },
   header: {
     flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
@@ -130,4 +129,4 @@ const styles = StyleSheet.create({
 
   saveBtn:     { backgroundColor: BLACK, borderRadius: 14, paddingVertical: 16, alignItems: 'center' },
   saveBtnText: { color: WHITE, fontSize: 16, fontWeight: '700' },
-});
+}); }

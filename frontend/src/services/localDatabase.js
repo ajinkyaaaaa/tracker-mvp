@@ -157,6 +157,14 @@ export async function getUnsyncedStops(date) {
   );
 }
 
+// Updates dwell_duration on an existing stop → called by MapScreen after grace period
+export async function updateStopDwell(id, dwell_duration) {
+  await db.runAsync(
+    'UPDATE local_stops SET dwell_duration = ? WHERE id = ?',
+    [dwell_duration, id]
+  );
+}
+
 // Marks all unsynced stops for a date as synced → called after api.syncBulkStops()
 export async function markStopsSynced(date) {
   await db.runAsync(

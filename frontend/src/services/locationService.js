@@ -14,7 +14,8 @@ const LOCATION_CACHE_KEY = 'cached_locations';
 // Must be defined at module level (not inside a component) per Expo TaskManager rules.
 // Fired by the OS; caches points to AsyncStorage for later sync via api.syncLocations()
 TaskManager.defineTask(LOCATION_TASK, async ({ data, error }) => {
-  if (error) { console.error('Background location error:', error); return; }
+  // kCLErrorDomain Code=0 (kCLErrorLocationUnknown) is a transient iOS GPS-not-fixed signal — not fatal
+  if (error) { console.warn('Background location error:', error); return; }
   if (!data)  return;
 
   const { locations } = data;

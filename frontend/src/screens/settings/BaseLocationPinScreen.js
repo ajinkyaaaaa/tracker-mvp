@@ -15,14 +15,7 @@ import { View, Text, TouchableOpacity, TextInput, StyleSheet,
 import MapView, { Circle, PROVIDER_GOOGLE }                   from 'react-native-maps';
 import AsyncStorage                                           from '@react-native-async-storage/async-storage';
 import { MaterialIcons }                                      from '@expo/vector-icons';
-
-const BG    = '#FFFFFF';
-const CARD  = '#F2F2F7';
-const BLACK = '#000000';
-const GRAY  = '#6D6D72';
-const GRAY2 = '#C7C7CC';
-const GRAY3 = '#E5E5EA';
-const WHITE = '#FFFFFF';
+import { useTheme }                                           from '../../contexts/ThemeContext';
 
 const RADIUS_PRESETS = [50, 100, 150, 200];
 
@@ -51,6 +44,9 @@ async function geocodeQuery(query, userCoord, profileHint) {
 }
 
 export default function BaseLocationPinScreen({ navigation, route }) {
+  const { BG, CARD, BLACK, GRAY, GRAY2, GRAY3, WHITE } = useTheme();
+  const styles = makeStyles({ BG, CARD, BLACK, GRAY, GRAY2, GRAY3, WHITE });
+
   const { initialCoord, label, locationType, initialRadius } = route.params;
 
   const [step,        setStep]        = useState(1);
@@ -277,7 +273,7 @@ export default function BaseLocationPinScreen({ navigation, route }) {
   );
 }
 
-const styles = StyleSheet.create({
+function makeStyles({ BG, CARD, BLACK, GRAY, GRAY2, GRAY3, WHITE }) { return StyleSheet.create({
   safe: { flex: 1, backgroundColor: BG },
 
   header: {
@@ -354,4 +350,4 @@ const styles = StyleSheet.create({
     flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8,
   },
   primaryBtnText: { color: WHITE, fontSize: 16, fontWeight: '700' },
-});
+}); }

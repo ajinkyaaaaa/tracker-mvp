@@ -9,7 +9,7 @@
 //   drainCacheToSQLite()→ every 60 s moves cache → localDatabase.js → local_locations
 //   localDatabase.js    → getTodayPath()          → Polyline on map
 //   GET /api/saved-locations → loadSavedLocations() → emoji markers + idle suppression
-//   idle detection → autoArchiveIdleEvent() → insertStop() / insertClientVisit() → local DB only
+//   idle detection → onIdleThresholdReached() → insertStop() / insertClientVisit() immediately → local DB only
 //   loginTime (AuthContext) → insertLoginSession() → local_login_sessions on mount
 //   openInMaps()   → Linking.openURL (native Maps hand-off, no backend)
 
@@ -32,7 +32,7 @@ import {
 } from '../services/locationService';
 import {
   insertLocation, getTodayPath,
-  insertStop, insertClientVisit, getStopsByDate,
+  insertStop, updateStopDwell, insertClientVisit, getStopsByDate,
   insertLoginSession, getLoginSessionsByDateRange,
 } from '../services/localDatabase';
 
@@ -284,11 +284,17 @@ export default function MapScreen({ navigation }) {
     return nearby ? nearby.name : null;
   })();
 
-  // Cycles 1→2→3→1 every 500 ms for the "You're moving..." dot animation
-  const [dotCount, setDotCount] = useState(1);
+  // Fade in/out loop for the "You're moving" label
+  const movingFade = useRef(new Animated.Value(1)).current;
   useEffect(() => {
-    const id = setInterval(() => setDotCount(d => d >= 3 ? 1 : d + 1), 500);
-    return () => clearInterval(id);
+    const anim = Animated.loop(
+      Animated.sequence([
+        Animated.timing(movingFade, { toValue: 0.25, duration: 900, useNativeDriver: true }),
+        Animated.timing(movingFade, { toValue: 1,    duration: 900, useNativeDriver: true }),
+      ])
+    );
+    anim.start();
+    return () => anim.stop();
   }, []);
 
   useEffect(() => {
@@ -527,7 +533,38 @@ export default function MapScreen({ navigation }) {
     if (isInCooldownZone(latitude, longitude))    { idleTimerRef.current = setTimeout(onIdleThresholdReached, IDLE_THRESHOLD_MS); return; }
     if (notificationFiredRef.current) return;
     notificationFiredRef.current = true;
+
     const dwellMins = Math.round((Date.now() - idleStartTimeRef.current) / 60000);
+    const arrivedAt = new Date(idleStartTimeRef.current).toISOString();
+
+    // Insert the stop immediately so ArchiveScreen shows it the moment the user taps the notification
+    let stopId = null;
+    try {
+      stopId = await insertStop({
+        latitude, longitude,
+        arrived_at:    arrivedAt,
+        triggered_at:  new Date().toISOString(),
+        dwell_duration: dwellMins,
+        date:           todayDate,
+      });
+      // Also record a client visit if at a known saved location
+      const match = savedLocations.find(
+        (l) => getDistance(latitude, longitude, l.latitude, l.longitude) < SAVED_LOCATION_RADIUS
+      );
+      if (match) {
+        await insertClientVisit({
+          stop_id:             stopId,
+          saved_location_name: match.name,
+          saved_location_cat:  match.category,
+          latitude, longitude,
+          arrived_at:          arrivedAt,
+          dwell_duration:      dwellMins,
+          date:                todayDate,
+        });
+      }
+      await loadPendingCount();
+    } catch {}
+
     await Notifications.scheduleNotificationAsync({
       content: {
         title: "You've been here for a while",
@@ -536,8 +573,12 @@ export default function MapScreen({ navigation }) {
       },
       trigger: null,
     });
-    graceTimerRef.current = setTimeout(() => {
-      autoArchiveIdleEvent(latitude, longitude, dwellMins + 10);
+
+    // Grace period: update the dwell time to reflect how long they actually stayed
+    graceTimerRef.current = setTimeout(async () => {
+      if (stopId !== null) {
+        try { await updateStopDwell(stopId, dwellMins + Math.round(GRACE_PERIOD_MS / 60000)); } catch {}
+      }
       addCooldownZone(latitude, longitude, 2 * 60 * 60 * 1000);
     }, GRACE_PERIOD_MS);
   }
@@ -565,37 +606,6 @@ export default function MapScreen({ navigation }) {
     } catch {}
   }
 
-  // Saves idle stop to local SQLite (no server call).
-  // If the stop is near a saved location, also creates a local_client_visits row.
-  async function autoArchiveIdleEvent(lat, lng, dwellMins) {
-    try {
-      const arrivedAt = new Date(idleStartTimeRef.current).toISOString();
-      const stopId    = await insertStop({
-        latitude:      lat,
-        longitude:     lng,
-        arrived_at:    arrivedAt,
-        triggered_at:  new Date().toISOString(),
-        dwell_duration: dwellMins,
-        date:          todayDate,
-      });
-      const match = savedLocations.find(
-        (l) => getDistance(lat, lng, l.latitude, l.longitude) < SAVED_LOCATION_RADIUS
-      );
-      if (match) {
-        await insertClientVisit({
-          stop_id:            stopId,
-          saved_location_name: match.name,
-          saved_location_cat:  match.category,
-          latitude:            lat,
-          longitude:           lng,
-          arrived_at:          arrivedAt,
-          dwell_duration:      dwellMins,
-          date:                todayDate,
-        });
-      }
-      await loadPendingCount();
-    } catch {}
-  }
 
   function getDistance(lat1, lon1, lat2, lon2) {
     const R = 6371e3, r1 = (lat1 * Math.PI) / 180, r2 = (lat2 * Math.PI) / 180;
@@ -683,7 +693,7 @@ export default function MapScreen({ navigation }) {
   const savedBorder = isSat ? WHITE : BLACK;
 
   // UI chrome theme — dark in normal mode, light in satellite mode
-  const uiBg      = isSat ? 'rgba(255,255,255,0.95)' : 'rgba(0,0,0,0.92)';
+  const uiBg      = isSat ? 'rgba(255,255,255,0.90)' : 'rgba(0,0,0,0.85)';
   const uiBorder  = isSat ? GRAY3                    : 'rgba(255,255,255,0.12)';
   const uiDivider = isSat ? GRAY3                    : 'rgba(255,255,255,0.12)';
   const uiText    = isSat ? BLACK                    : WHITE;
@@ -706,7 +716,7 @@ export default function MapScreen({ navigation }) {
   // Nav pill: active capsule inverts against the pill background
   const navCapsuleBg    = isSat ? BLACK                    : WHITE;
   const navCapsuleText  = isSat ? WHITE                    : BLACK;
-  const navInactiveIcon = isSat ? 'rgba(0,0,0,0.38)'      : 'rgba(255,255,255,0.50)';
+  const navInactiveIcon = isSat ? 'rgba(0,0,0,0.45)'      : 'rgba(255,255,255,0.65)';
 
   return (
     <View style={styles.container}>
@@ -787,7 +797,7 @@ export default function MapScreen({ navigation }) {
       <Animated.View style={[styles.navPill, { opacity: navAnim, backgroundColor: uiBg }]}>
         {/* Home — active */}
         <View style={styles.navTab}>
-          <View style={[styles.navActiveCapsule, { backgroundColor: navCapsuleBg }]}>
+          <View style={[styles.navCapsule, { backgroundColor: navCapsuleBg }]}>
             <MaterialIcons name="near-me" size={15} color={navCapsuleText} />
             <Text style={[styles.navActiveLabel, { color: navCapsuleText }]}>Home</Text>
           </View>
@@ -795,15 +805,19 @@ export default function MapScreen({ navigation }) {
 
         {/* Archive */}
         <TouchableOpacity style={styles.navTab} onPress={() => navigation.navigate('Archive')} activeOpacity={0.75}>
-          <View style={styles.navTabIconWrap}>
-            <MaterialIcons name="view-list" size={22} color={navInactiveIcon} />
-            {pendingCount > 0 && <View style={styles.navDot} />}
+          <View style={styles.navCapsule}>
+            <View style={styles.navTabIconWrap}>
+              <MaterialIcons name="view-list" size={20} color={navInactiveIcon} />
+              {pendingCount > 0 && <View style={styles.navDot} />}
+            </View>
           </View>
         </TouchableOpacity>
 
         {/* Sync */}
         <TouchableOpacity style={styles.navTab} onPress={() => navigation.navigate('Sync')} activeOpacity={0.75}>
-          <MaterialIcons name="cloud-upload" size={22} color={navInactiveIcon} />
+          <View style={styles.navCapsule}>
+            <MaterialIcons name="cloud-upload" size={20} color={navInactiveIcon} />
+          </View>
         </TouchableOpacity>
       </Animated.View>
 
@@ -818,7 +832,7 @@ export default function MapScreen({ navigation }) {
 
         <View style={[styles.loginWidgetDivider, { backgroundColor: uiDivider }]} />
 
-        {/* Right: date+week label · 7 status boxes · "i" button — all in one row */}
+        {/* Right: date+week label · 7 status boxes · arrow button — all in one row */}
         <View style={styles.weekCluster}>
           <View style={styles.weekBoxRow}>
             <View style={styles.weekDateStack}>
@@ -883,6 +897,15 @@ export default function MapScreen({ navigation }) {
           </View>
         </View>
 
+        {/* Arrow button — opens Calendar / login history */}
+        <TouchableOpacity
+          style={styles.loginWidgetArrow}
+          onPress={() => navigation.navigate('DayLog')}
+          activeOpacity={0.75}
+        >
+          <MaterialIcons name="chevron-right" size={20} color="#000000" />
+        </TouchableOpacity>
+
       </Animated.View>
 
       {/* ── Orbit toggle — top-right below login widget ── */}
@@ -909,9 +932,9 @@ export default function MapScreen({ navigation }) {
                 You're at <Text style={[styles.atBaseName, isSat && styles.atBaseNameSat]}>{currentPlaceName}</Text>
               </Text>
             ) : (
-              <Text style={[styles.atBaseText, isSat && styles.atBaseTextSat]}>
-                You're moving<Text style={[styles.atBaseName, isSat && styles.atBaseNameSat]}>{'.'.repeat(dotCount)}</Text>
-              </Text>
+              <Animated.Text style={[styles.atBaseText, isSat && styles.atBaseTextSat, { opacity: movingFade }]}>
+                You're moving
+              </Animated.Text>
             )}
           </View>
         </Animated.View>
@@ -1039,10 +1062,10 @@ const styles = StyleSheet.create({
     shadowColor: '#000', shadowOffset: { width: 0, height: 4 },
     shadowOpacity: 0.22, shadowRadius: 12, elevation: 8,
   },
-  navTab:           { flex: 1, alignItems: 'center', justifyContent: 'center', paddingVertical: 2 },
-  navActiveCapsule: {
-    flexDirection: 'row', alignItems: 'center', gap: 6,
-    paddingHorizontal: 14, paddingVertical: 8, borderRadius: 100,
+  navTab:        { flex: 1, alignItems: 'center', justifyContent: 'center', paddingVertical: 2 },
+  navCapsule:    {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6,
+    paddingHorizontal: 14, paddingVertical: 8, borderRadius: 100, minWidth: 64,
   },
   navActiveLabel:   { fontSize: 14, fontWeight: '700' },
   navTabIconWrap:   { position: 'relative' },
@@ -1063,6 +1086,12 @@ const styles = StyleSheet.create({
   loginWidgetLabel:   { fontSize: 9, fontWeight: '700', letterSpacing: 1.4, textTransform: 'uppercase' },
   loginWidgetTime:    { fontSize: 20, fontWeight: '800', letterSpacing: -0.5, marginTop: 1 },
   loginWidgetDivider: { width: 1, height: 34 },
+  loginWidgetArrow: {
+    marginLeft: 'auto',
+    width: 30, height: 30, borderRadius: 15,
+    backgroundColor: '#FFFFFF',
+    justifyContent: 'center', alignItems: 'center',
+  },
 
   atBaseWidget: {
     position: 'absolute', bottom: 100, left: 0, right: 0,
@@ -1077,7 +1106,7 @@ const styles = StyleSheet.create({
     shadowColor: '#000', shadowOffset: { width: 0, height: 3 },
     shadowOpacity: 0.25, shadowRadius: 8, elevation: 6,
   },
-  atBaseText: { color: 'rgba(255,255,255,0.75)', fontSize: 14, fontWeight: '500' },
+  atBaseText: { color: 'rgba(255,255,255,0.75)', fontSize: 14, fontWeight: '500', textAlign: 'center' },
   atBaseName: { color: WHITE, fontWeight: '700' },
   atBasePillSat: { backgroundColor: WHITE },
   atBaseTextSat: { color: 'rgba(0,0,0,0.6)' },

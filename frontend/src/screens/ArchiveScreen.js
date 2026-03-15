@@ -7,7 +7,8 @@
 //   localDatabase.js → respondToStop(id, response) → submitResponse()  → marks card 'completed'
 //   AsyncStorage (muted_locations)                 → muteLocationForHours() → local mute list
 
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
+import { useFocusEffect } from '@react-navigation/native';
 import {
   View, Text, StyleSheet, FlatList, RefreshControl,
   TouchableOpacity, Alert, Animated, LayoutAnimation, UIManager, Platform,
@@ -17,15 +18,9 @@ import MapView, { Marker, PROVIDER_GOOGLE } from 'react-native-maps';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { getStopsByDate, respondToStop } from '../services/localDatabase';
 import StopResponseModal from '../components/StopResponseModal';
+import { useTheme } from '../contexts/ThemeContext';
 
-const BG    = '#FFFFFF';
-const CARD  = '#F2F2F7';
-const BLACK = '#000000';
-const GRAY  = '#6D6D72';
-const GRAY2 = '#C7C7CC';
-const GRAY3 = '#E5E5EA';
-const WHITE = '#FFFFFF';
-const RED   = '#FF3B30';
+const RED = '#FF3B30';
 
 if (Platform.OS === 'android' && UIManager.setLayoutAnimationEnabledExperimental) {
   UIManager.setLayoutAnimationEnabledExperimental(true);
@@ -49,6 +44,9 @@ function ScalePress({ onPress, style, children, disabled }) {
 }
 
 export default function ArchiveScreen({ navigation }) {
+  const { BG, CARD, BLACK, GRAY, GRAY2, GRAY3, WHITE, isDark } = useTheme();
+  const styles = makeStyles(useTheme());
+
   const [activities,       setActivities]      = useState([]);
   const [refreshing,       setRefreshing]       = useState(false);
   const [selectedActivity, setSelectedActivity] = useState(null);
@@ -69,6 +67,9 @@ export default function ArchiveScreen({ navigation }) {
     ]).start();
     loadActivities();
   }, []);
+
+  // Reload whenever the screen is focused — ensures stops inserted after a notification tap appear immediately
+  useFocusEffect(useCallback(() => { loadActivities(); }, []));
 
   // Reads today's stops from local SQLite → no network call
   async function loadActivities() {
@@ -191,15 +192,17 @@ export default function ArchiveScreen({ navigation }) {
     <View style={styles.container}>
 
       {/* ── Nav Pill ── */}
-      <Animated.View style={[styles.navPill, { opacity: navAnim }]}>
+      <Animated.View style={[styles.navPill, { opacity: navAnim, backgroundColor: isDark ? 'rgba(255,255,255,0.15)' : 'rgba(0,0,0,0.92)' }]}>
         {/* Home */}
         <TouchableOpacity style={styles.navTab} onPress={() => navigation.navigate('Home')} activeOpacity={0.75}>
-          <MaterialIcons name="near-me" size={22} color="rgba(255,255,255,0.50)" />
+          <View style={styles.navCapsule}>
+            <MaterialIcons name="near-me" size={20} color="rgba(255,255,255,0.65)" />
+          </View>
         </TouchableOpacity>
 
         {/* Archive — active */}
         <View style={styles.navTab}>
-          <View style={styles.navActiveCapsule}>
+          <View style={[styles.navCapsule, styles.navCapsuleActive]}>
             <MaterialIcons name="view-list" size={15} color={BLACK} />
             <Text style={styles.navActiveLabel}>Archive</Text>
             {pendingCount > 0 && (
@@ -212,41 +215,48 @@ export default function ArchiveScreen({ navigation }) {
 
         {/* Sync */}
         <TouchableOpacity style={styles.navTab} onPress={() => navigation.navigate('Sync')} activeOpacity={0.75}>
-          <MaterialIcons name="cloud-upload" size={22} color="rgba(255,255,255,0.50)" />
+          <View style={styles.navCapsule}>
+            <MaterialIcons name="cloud-upload" size={20} color="rgba(255,255,255,0.65)" />
+          </View>
         </TouchableOpacity>
       </Animated.View>
 
-      {/* ── Section header ── */}
-      <Animated.View style={[styles.sectionHeader, { opacity: listOpAnim, transform: [{ translateY: listAnim }] }]}>
-        <Text style={styles.sectionTitle}>Today's Stops</Text>
-        {pendingCount > 0 && (
-          <View style={styles.pendingPill}>
-            <Text style={styles.pendingPillText}>{pendingCount} pending</Text>
+      {/* ── List / Empty — section header lives inside scroll so nav pill never overlaps ── */}
+      <Animated.View style={[{ flex: 1 }, { opacity: listOpAnim, transform: [{ translateY: listAnim }] }]}>
+        {activities.length === 0 ? (
+          <View style={styles.emptyOuter}>
+            <View style={styles.sectionHeader}>
+              <Text style={styles.sectionTitle}>Today's Stops</Text>
+            </View>
+            <View style={styles.empty}>
+              <MaterialIcons name="location-off" size={52} color={GRAY} style={{ marginBottom: 18 }} />
+              <Text style={styles.emptyTitle}>No stops yet today</Text>
+              <Text style={styles.emptyHint}>Activity stops appear when you stay in one place for 15+ minutes</Text>
+            </View>
           </View>
-        )}
-      </Animated.View>
-
-      {/* ── List / Empty ── */}
-      {activities.length === 0 ? (
-        <Animated.View style={[styles.empty, { opacity: listOpAnim, transform: [{ translateY: listAnim }] }]}>
-          <Text style={styles.emptyIcon}>📭</Text>
-          <Text style={styles.emptyTitle}>No stops yet today</Text>
-          <Text style={styles.emptyHint}>Activity stops appear when you stay in one place for 15+ minutes</Text>
-        </Animated.View>
-      ) : (
-        <Animated.View style={[{ flex: 1 }, { opacity: listOpAnim, transform: [{ translateY: listAnim }] }]}>
+        ) : (
           <FlatList
             data={activities}
             keyExtractor={(item) => item.id.toString()}
             renderItem={renderGeoCard}
+            ListHeaderComponent={
+              <View style={styles.sectionHeader}>
+                <Text style={styles.sectionTitle}>Today's Stops</Text>
+                {pendingCount > 0 && (
+                  <View style={styles.pendingPill}>
+                    <Text style={styles.pendingPillText}>{pendingCount} pending</Text>
+                  </View>
+                )}
+              </View>
+            }
             contentContainerStyle={styles.list}
             showsVerticalScrollIndicator={false}
             refreshControl={
               <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={BLACK} />
             }
           />
-        </Animated.View>
-      )}
+        )}
+      </Animated.View>
 
       {/* ── Response modal (shared component) ── */}
       <StopResponseModal
@@ -259,94 +269,98 @@ export default function ArchiveScreen({ navigation }) {
   );
 }
 
-const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: BG },
+function makeStyles({ BG, CARD, BLACK, GRAY, GRAY2, GRAY3, WHITE }) {
+  return StyleSheet.create({
+    container: { flex: 1, backgroundColor: BG },
 
-  navPill: {
-    position: 'absolute', top: 56, left: 16, right: 16, zIndex: 10,
-    flexDirection: 'row', alignItems: 'center',
-    backgroundColor: 'rgba(0,0,0,0.92)', borderRadius: 100,
-    paddingVertical: 6, paddingHorizontal: 6,
-    shadowColor: '#000', shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.22, shadowRadius: 12, elevation: 8,
-  },
-  navTab:           { flex: 1, alignItems: 'center', justifyContent: 'center', paddingVertical: 2 },
-  navActiveCapsule: {
-    flexDirection: 'row', alignItems: 'center', gap: 6,
-    backgroundColor: WHITE, paddingHorizontal: 14, paddingVertical: 8, borderRadius: 100,
-  },
-  navActiveLabel: { color: BLACK, fontSize: 14, fontWeight: '700' },
-  navBadge: {
-    backgroundColor: RED, borderRadius: 8,
-    minWidth: 16, height: 16, paddingHorizontal: 4,
-    justifyContent: 'center', alignItems: 'center',
-  },
-  navBadgeText: { color: WHITE, fontSize: 10, fontWeight: '900' },
+    navPill: {
+      position: 'absolute', top: 56, left: 16, right: 16, zIndex: 10,
+      flexDirection: 'row', alignItems: 'center',
+      borderRadius: 100,
+      paddingVertical: 6, paddingHorizontal: 6,
+      shadowColor: '#000', shadowOffset: { width: 0, height: 4 },
+      shadowOpacity: 0.22, shadowRadius: 12, elevation: 8,
+    },
+    navTab:          { flex: 1, alignItems: 'center', justifyContent: 'center', paddingVertical: 2 },
+    navCapsule:      {
+      flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6,
+      paddingHorizontal: 14, paddingVertical: 8, borderRadius: 100, minWidth: 64,
+    },
+    navCapsuleActive: { backgroundColor: WHITE },
+    navActiveLabel:   { color: BLACK, fontSize: 14, fontWeight: '700' },
+    navBadge: {
+      backgroundColor: RED, borderRadius: 8,
+      minWidth: 16, height: 16, paddingHorizontal: 4,
+      justifyContent: 'center', alignItems: 'center',
+    },
+    navBadgeText: { color: WHITE, fontSize: 10, fontWeight: '900' },
 
-  sectionHeader: {
-    flexDirection: 'row', alignItems: 'center',
-    marginTop: 104, paddingHorizontal: 24, marginBottom: 8,
-  },
-  sectionTitle: { color: BLACK, fontSize: 22, fontWeight: '900', flex: 1 },
-  pendingPill: {
-    backgroundColor: 'rgba(255,59,48,0.1)',
-    borderRadius: 12, paddingHorizontal: 12, paddingVertical: 5,
-    borderWidth: 1, borderColor: 'rgba(255,59,48,0.25)',
-  },
-  pendingPillText: { color: RED, fontSize: 12, fontWeight: '800' },
+    // 56 (pill top) + 6 (pill paddingTop) + 2 (navTab padding) + 8 (capsule padding) + 20 (icon) + 8 + 2 + 6 = 108px pill bottom; +18px gap
+    sectionHeader: {
+      flexDirection: 'row', alignItems: 'center',
+      paddingHorizontal: 24, paddingBottom: 12, paddingTop: 4,
+    },
+    sectionTitle: { color: BLACK, fontSize: 22, fontWeight: '900', flex: 1 },
+    pendingPill: {
+      backgroundColor: 'rgba(255,59,48,0.1)',
+      borderRadius: 12, paddingHorizontal: 12, paddingVertical: 5,
+      borderWidth: 1, borderColor: 'rgba(255,59,48,0.25)',
+    },
+    pendingPillText: { color: RED, fontSize: 12, fontWeight: '800' },
 
-  list: { paddingHorizontal: 20, paddingTop: 8, paddingBottom: 48 },
+    // paddingTop clears the absolute-positioned nav pill (bottom ~108px) + 18px breathing room
+    list:      { paddingHorizontal: 20, paddingTop: 126, paddingBottom: 48 },
+    emptyOuter:{ flex: 1, paddingTop: 118 },
+    empty:     { flex: 1, justifyContent: 'center', alignItems: 'center', paddingHorizontal: 40, paddingBottom: 80 },
+    emptyTitle:{ color: BLACK, fontSize: 19, fontWeight: '800', textAlign: 'center', marginBottom: 8 },
+    emptyHint: { color: GRAY,  fontSize: 14, textAlign: 'center', lineHeight: 21 },
 
-  empty:      { flex: 1, justifyContent: 'center', alignItems: 'center', paddingHorizontal: 40 },
-  emptyIcon:  { fontSize: 56, marginBottom: 18 },
-  emptyTitle: { color: BLACK, fontSize: 19, fontWeight: '800', textAlign: 'center', marginBottom: 8 },
-  emptyHint:  { color: GRAY,  fontSize: 14, textAlign: 'center', lineHeight: 21 },
+    card: {
+      backgroundColor: CARD,
+      borderRadius: 18, marginBottom: 14,
+      overflow: 'hidden',
+      borderWidth: 1, borderColor: GRAY3,
+      shadowColor: '#000', shadowOffset: { width: 0, height: 2 },
+      shadowOpacity: 0.06, shadowRadius: 8, elevation: 3,
+    },
+    cardPending: { borderColor: 'rgba(255,59,48,0.3)' },
 
-  card: {
-    backgroundColor: WHITE,
-    borderRadius: 18, marginBottom: 14,
-    overflow: 'hidden',
-    borderWidth: 1, borderColor: GRAY3,
-    shadowColor: '#000', shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.06, shadowRadius: 8, elevation: 3,
-  },
-  cardPending: { borderColor: 'rgba(255,59,48,0.3)' },
+    miniMapContainer: { height: 140, position: 'relative' },
+    miniMap:          { flex: 1 },
+    mapOverlay:       { ...StyleSheet.absoluteFillObject, backgroundColor: 'rgba(0,0,0,0.03)' },
 
-  miniMapContainer: { height: 140, position: 'relative' },
-  miniMap:          { flex: 1 },
-  mapOverlay:       { ...StyleSheet.absoluteFillObject, backgroundColor: 'rgba(0,0,0,0.03)' },
+    triggerBadge: {
+      position: 'absolute', top: 10, left: 10,
+      backgroundColor: BLACK, borderRadius: 10,
+      paddingHorizontal: 10, paddingVertical: 5,
+    },
+    triggerBadgeText: { color: WHITE, fontSize: 12, fontWeight: '800' },
 
-  triggerBadge: {
-    position: 'absolute', top: 10, left: 10,
-    backgroundColor: BLACK, borderRadius: 10,
-    paddingHorizontal: 10, paddingVertical: 5,
-  },
-  triggerBadgeText: { color: WHITE, fontSize: 12, fontWeight: '800' },
+    dwellBadge: {
+      position: 'absolute', top: 10, right: 10,
+      backgroundColor: CARD, borderRadius: 8,
+      paddingHorizontal: 10, paddingVertical: 5,
+      borderWidth: 1, borderColor: GRAY3,
+    },
+    dwellBadgeText: { color: BLACK, fontSize: 12, fontWeight: '700' },
 
-  dwellBadge: {
-    position: 'absolute', top: 10, right: 10,
-    backgroundColor: 'rgba(255,255,255,0.92)', borderRadius: 8,
-    paddingHorizontal: 10, paddingVertical: 5,
-    borderWidth: 1, borderColor: GRAY3,
-  },
-  dwellBadgeText: { color: BLACK, fontSize: 12, fontWeight: '700' },
+    cardContent:   { padding: 14 },
+    cardStatusRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
 
-  cardContent:   { padding: 14 },
-  cardStatusRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+    statusChip:       { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 10, paddingVertical: 5, borderRadius: 8, gap: 6 },
+    chipPending:      { backgroundColor: 'rgba(255,59,48,0.08)' },
+    chipCompleted:    { backgroundColor: CARD },
+    chipDot:          { width: 7, height: 7, borderRadius: 4 },
+    chipDotPending:   { backgroundColor: RED },
+    chipDotCompleted: { backgroundColor: BLACK },
+    statusText:       { fontSize: 12, fontWeight: '800' },
+    statusPending:    { color: RED },
+    statusCompleted:  { color: BLACK },
+    tapHint:          { color: GRAY, fontSize: 12, fontStyle: 'italic' },
 
-  statusChip:       { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 10, paddingVertical: 5, borderRadius: 8, gap: 6 },
-  chipPending:      { backgroundColor: 'rgba(255,59,48,0.08)' },
-  chipCompleted:    { backgroundColor: CARD },
-  chipDot:          { width: 7, height: 7, borderRadius: 4 },
-  chipDotPending:   { backgroundColor: RED },
-  chipDotCompleted: { backgroundColor: BLACK },
-  statusText:       { fontSize: 12, fontWeight: '800' },
-  statusPending:    { color: RED },
-  statusCompleted:  { color: BLACK },
-  tapHint:          { color: GRAY, fontSize: 12, fontStyle: 'italic' },
-
-  responseRow:   { marginTop: 10 },
-  responseLabel: { color: GRAY, fontSize: 11, fontWeight: '700', textTransform: 'uppercase', letterSpacing: 0.8, marginBottom: 4 },
-  responseValue: { color: BLACK, fontSize: 15, lineHeight: 22 },
-  respondedAt:   { color: GRAY, fontSize: 11, marginTop: 4 },
-});
+    responseRow:   { marginTop: 10 },
+    responseLabel: { color: GRAY, fontSize: 11, fontWeight: '700', textTransform: 'uppercase', letterSpacing: 0.8, marginBottom: 4 },
+    responseValue: { color: BLACK, fontSize: 15, lineHeight: 22 },
+    respondedAt:   { color: GRAY, fontSize: 11, marginTop: 4 },
+  });
+}

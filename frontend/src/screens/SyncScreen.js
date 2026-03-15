@@ -23,16 +23,10 @@ import {
   upsertSyncLog, respondToStop,
 } from '../services/localDatabase';
 import StopResponseModal from '../components/StopResponseModal';
+import { useTheme } from '../contexts/ThemeContext';
 
 const { width } = Dimensions.get('window');
 
-const BG    = '#FFFFFF';
-const CARD  = '#F2F2F7';
-const BLACK = '#000000';
-const GRAY  = '#6D6D72';
-const GRAY2 = '#C7C7CC';
-const GRAY3 = '#E5E5EA';
-const WHITE = '#FFFFFF';
 const GREEN = '#34C759';
 const RED   = '#FF3B30';
 
@@ -85,6 +79,7 @@ function ScalePress({ onPress, style, children, disabled }) {
 }
 
 function SyncSection({ label, status, progress, unsyncedCount, children }) {
+  const styles = makeStyles(useTheme());
   const barWidth = progress.interpolate({ inputRange: [0, 1], outputRange: ['0%', '100%'] });
   return (
     <View style={styles.section}>
@@ -113,6 +108,9 @@ function SyncSection({ label, status, progress, unsyncedCount, children }) {
 // ── SyncScreen ─────────────────────────────────────────────────────────────────
 export default function SyncScreen({ navigation, route }) {
   const date = route.params?.date || new Date().toISOString().slice(0, 10);
+
+  const { BG, CARD, BLACK, GRAY, GRAY2, GRAY3, WHITE, isDark } = useTheme();
+  const styles = makeStyles(useTheme());
 
   const [locations,        setLocations]        = useState([]);
   const [stops,            setStops]            = useState([]);
@@ -247,20 +245,24 @@ export default function SyncScreen({ navigation, route }) {
     <View style={styles.container}>
 
       {/* ── Nav Pill ── */}
-      <Animated.View style={[styles.navPill, { opacity: navAnim }]}>
+      <Animated.View style={[styles.navPill, { opacity: navAnim, backgroundColor: isDark ? 'rgba(255,255,255,0.15)' : 'rgba(0,0,0,0.92)' }]}>
         {/* Home */}
         <TouchableOpacity style={styles.navTab} onPress={() => navigation.navigate('Home')} activeOpacity={0.75}>
-          <MaterialIcons name="near-me" size={22} color="rgba(255,255,255,0.50)" />
+          <View style={styles.navCapsule}>
+            <MaterialIcons name="near-me" size={20} color="rgba(255,255,255,0.65)" />
+          </View>
         </TouchableOpacity>
 
         {/* Archive */}
         <TouchableOpacity style={styles.navTab} onPress={() => navigation.navigate('Archive')} activeOpacity={0.75}>
-          <MaterialIcons name="view-list" size={22} color="rgba(255,255,255,0.50)" />
+          <View style={styles.navCapsule}>
+            <MaterialIcons name="view-list" size={20} color="rgba(255,255,255,0.65)" />
+          </View>
         </TouchableOpacity>
 
         {/* Sync — active */}
         <View style={styles.navTab}>
-          <View style={styles.navActiveCapsule}>
+          <View style={[styles.navCapsule, styles.navCapsuleActive]}>
             <MaterialIcons name="cloud-upload" size={15} color={BLACK} />
             <Text style={styles.navActiveLabel}>Sync</Text>
           </View>
@@ -380,88 +382,91 @@ export default function SyncScreen({ navigation, route }) {
   );
 }
 
-const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: BG },
+function makeStyles({ BG, CARD, BLACK, GRAY, GRAY2, GRAY3, WHITE }) {
+  return StyleSheet.create({
+    container: { flex: 1, backgroundColor: BG },
 
-  navPill: {
-    position: 'absolute', top: 56, left: 16, right: 16, zIndex: 10,
-    flexDirection: 'row', alignItems: 'center',
-    backgroundColor: 'rgba(0,0,0,0.92)', borderRadius: 100,
-    paddingVertical: 6, paddingHorizontal: 6,
-    shadowColor: '#000', shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.22, shadowRadius: 12, elevation: 8,
-  },
-  navTab:           { flex: 1, alignItems: 'center', justifyContent: 'center', paddingVertical: 2 },
-  navActiveCapsule: {
-    flexDirection: 'row', alignItems: 'center', gap: 6,
-    backgroundColor: WHITE, paddingHorizontal: 14, paddingVertical: 8, borderRadius: 100,
-  },
-  navActiveLabel: { color: BLACK, fontSize: 14, fontWeight: '700' },
+    navPill: {
+      position: 'absolute', top: 56, left: 16, right: 16, zIndex: 10,
+      flexDirection: 'row', alignItems: 'center',
+      borderRadius: 100,
+      paddingVertical: 6, paddingHorizontal: 6,
+      shadowColor: '#000', shadowOffset: { width: 0, height: 4 },
+      shadowOpacity: 0.22, shadowRadius: 12, elevation: 8,
+    },
+    navTab:          { flex: 1, alignItems: 'center', justifyContent: 'center', paddingVertical: 2 },
+    navCapsule:      {
+      flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6,
+      paddingHorizontal: 14, paddingVertical: 8, borderRadius: 100, minWidth: 64,
+    },
+    navCapsuleActive: { backgroundColor: WHITE },
+    navActiveLabel:   { color: BLACK, fontSize: 14, fontWeight: '700' },
 
-  scroll:        { flex: 1 },
-  scrollContent: { paddingTop: 104, paddingHorizontal: 20, paddingBottom: 48 },
+    scroll:        { flex: 1 },
+    scrollContent: { paddingTop: 126, paddingHorizontal: 20, paddingBottom: 48 },
 
-  dateRow:     { flexDirection: 'row', alignItems: 'baseline', justifyContent: 'space-between', marginBottom: 20 },
-  dateHeader:  { color: BLACK, fontSize: 24, fontWeight: '900' },
-  historyLink: { color: GRAY, fontSize: 13, fontWeight: '600' },
+    dateRow:     { flexDirection: 'row', alignItems: 'baseline', justifyContent: 'space-between', marginBottom: 20 },
+    dateHeader:  { color: BLACK, fontSize: 24, fontWeight: '900' },
+    historyLink: { color: GRAY, fontSize: 13, fontWeight: '600' },
 
-  section: {
-    backgroundColor: WHITE, borderRadius: 18, padding: 16, marginBottom: 14,
-    borderWidth: 1, borderColor: GRAY3,
-    shadowColor: '#000', shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.05, shadowRadius: 6, elevation: 2,
-  },
-  sectionHeaderRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 },
-  sectionLabel:     { color: GRAY, fontSize: 11, fontWeight: '700', letterSpacing: 1.2, textTransform: 'uppercase' },
-  sectionMeta:      { flexDirection: 'row', alignItems: 'center', gap: 8 },
-  unsyncedBadge: {
-    backgroundColor: 'rgba(255,59,48,0.1)', borderRadius: 10,
-    paddingHorizontal: 8, paddingVertical: 3,
-    borderWidth: 1, borderColor: 'rgba(255,59,48,0.25)',
-  },
-  unsyncedBadgeText: { color: RED, fontSize: 11, fontWeight: '800' },
+    section: {
+      backgroundColor: WHITE, borderRadius: 18, padding: 16, marginBottom: 14,
+      borderWidth: 1, borderColor: GRAY3,
+      shadowColor: '#000', shadowOffset: { width: 0, height: 2 },
+      shadowOpacity: 0.05, shadowRadius: 6, elevation: 2,
+    },
+    sectionHeaderRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 },
+    sectionLabel:     { color: GRAY, fontSize: 11, fontWeight: '700', letterSpacing: 1.2, textTransform: 'uppercase' },
+    sectionMeta:      { flexDirection: 'row', alignItems: 'center', gap: 8 },
+    unsyncedBadge: {
+      backgroundColor: 'rgba(255,59,48,0.1)', borderRadius: 10,
+      paddingHorizontal: 8, paddingVertical: 3,
+      borderWidth: 1, borderColor: 'rgba(255,59,48,0.25)',
+    },
+    unsyncedBadgeText: { color: RED, fontSize: 11, fontWeight: '800' },
 
-  progressTrack: { height: 4, backgroundColor: CARD, borderRadius: 2, marginBottom: 14, overflow: 'hidden' },
-  progressFill:  { height: 4, backgroundColor: BLACK, borderRadius: 2 },
+    progressTrack: { height: 4, backgroundColor: CARD, borderRadius: 2, marginBottom: 14, overflow: 'hidden' },
+    progressFill:  { height: 4, backgroundColor: BLACK, borderRadius: 2 },
 
-  travelRow:    { flexDirection: 'row', alignItems: 'center' },
-  travelStat:   { flex: 1, alignItems: 'center' },
-  travelNum:    { color: BLACK, fontSize: 26, fontWeight: '900' },
-  travelLabel:  { color: GRAY, fontSize: 12, marginTop: 2 },
-  travelDivider:{ width: 1, height: 40, backgroundColor: GRAY3 },
+    travelRow:    { flexDirection: 'row', alignItems: 'center' },
+    travelStat:   { flex: 1, alignItems: 'center' },
+    travelNum:    { color: BLACK, fontSize: 26, fontWeight: '900' },
+    travelLabel:  { color: GRAY, fontSize: 12, marginTop: 2 },
+    travelDivider:{ width: 1, height: 40, backgroundColor: GRAY3 },
 
-  stopsSub: { color: GRAY, fontSize: 13, fontWeight: '600', marginBottom: 10 },
-  stopRow: {
-    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
-    paddingVertical: 10, paddingHorizontal: 4,
-    borderTopWidth: 1, borderColor: GRAY3,
-  },
-  stopRowLeft:  { flexDirection: 'row', alignItems: 'center', gap: 8 },
-  stopRowRight: { flexDirection: 'row', alignItems: 'center', gap: 8 },
-  stopTime:     { color: BLACK, fontSize: 14, fontWeight: '700' },
-  stopDwell:    { color: GRAY, fontSize: 12 },
-  stopCategory: { color: GRAY, fontSize: 13 },
-  pendingDot:   { width: 8, height: 8, borderRadius: 4, backgroundColor: RED },
+    stopsSub: { color: GRAY, fontSize: 13, fontWeight: '600', marginBottom: 10 },
+    stopRow: {
+      flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
+      paddingVertical: 10, paddingHorizontal: 4,
+      borderTopWidth: 1, borderColor: GRAY3,
+    },
+    stopRowLeft:  { flexDirection: 'row', alignItems: 'center', gap: 8 },
+    stopRowRight: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+    stopTime:     { color: BLACK, fontSize: 14, fontWeight: '700' },
+    stopDwell:    { color: GRAY, fontSize: 12 },
+    stopCategory: { color: GRAY, fontSize: 13 },
+    pendingDot:   { width: 8, height: 8, borderRadius: 4, backgroundColor: RED },
 
-  visitRow:   { flexDirection: 'row', alignItems: 'center', gap: 12, paddingVertical: 10, borderTopWidth: 1, borderColor: GRAY3 },
-  visitIcon:  { fontSize: 22 },
-  visitInfo:  { flex: 1 },
-  visitName:  { color: BLACK, fontSize: 15, fontWeight: '700' },
-  visitDwell: { color: GRAY, fontSize: 12, marginTop: 2 },
+    visitRow:   { flexDirection: 'row', alignItems: 'center', gap: 12, paddingVertical: 10, borderTopWidth: 1, borderColor: GRAY3 },
+    visitIcon:  { fontSize: 22 },
+    visitInfo:  { flex: 1 },
+    visitName:  { color: BLACK, fontSize: 15, fontWeight: '700' },
+    visitDwell: { color: GRAY, fontSize: 12, marginTop: 2 },
 
-  unaccountedLabel: { color: GRAY, fontSize: 11, fontWeight: '700', letterSpacing: 1, textTransform: 'uppercase', marginTop: 14, marginBottom: 6 },
-  unaccountedRow:   { flexDirection: 'row', alignItems: 'center', gap: 12, paddingVertical: 8, borderTopWidth: 1, borderColor: GRAY3 },
-  unaccountedTime:  { color: BLACK, fontSize: 14, fontWeight: '700' },
-  unaccountedDwell: { color: GRAY, fontSize: 12 },
+    unaccountedLabel: { color: GRAY, fontSize: 11, fontWeight: '700', letterSpacing: 1, textTransform: 'uppercase', marginTop: 14, marginBottom: 6 },
+    unaccountedRow:   { flexDirection: 'row', alignItems: 'center', gap: 12, paddingVertical: 8, borderTopWidth: 1, borderColor: GRAY3 },
+    unaccountedTime:  { color: BLACK, fontSize: 14, fontWeight: '700' },
+    unaccountedDwell: { color: GRAY, fontSize: 12 },
 
-  emptyNote: { color: GRAY2, fontSize: 13, textAlign: 'center', paddingVertical: 8 },
+    emptyNote: { color: GRAY2, fontSize: 13, textAlign: 'center', paddingVertical: 8 },
 
-  syncBtn: {
-    flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 10,
-    backgroundColor: BLACK, borderRadius: 18, paddingVertical: 18, marginTop: 8,
-    shadowColor: '#000', shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.15, shadowRadius: 12, elevation: 5,
-  },
-  syncBtnDim:  { opacity: 0.4 },
-  syncBtnText: { color: WHITE, fontSize: 16, fontWeight: '800', letterSpacing: 0.2 },
-});
+    syncBtn: {
+      flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 10,
+      backgroundColor: BLACK, borderRadius: 18, paddingVertical: 18, marginTop: 8,
+      shadowColor: '#000', shadowOffset: { width: 0, height: 4 },
+      shadowOpacity: 0.15, shadowRadius: 12, elevation: 5,
+    },
+    syncBtnDim:  { opacity: 0.4 },
+    syncBtnText: { color: WHITE, fontSize: 16, fontWeight: '800', letterSpacing: 0.2 },
+  });
+}

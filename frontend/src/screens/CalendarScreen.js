@@ -15,21 +15,16 @@ import {
 import { Ionicons } from '@expo/vector-icons';
 import { api } from '../services/api';
 import { getSyncLog, getPendingDays } from '../services/localDatabase';
+import { useTheme } from '../contexts/ThemeContext';
 
 const { width } = Dimensions.get('window');
 const CELL_SIZE = Math.floor((width - 32) / 7);
 
-const BG    = '#FFFFFF';
-const CARD  = '#F2F2F7';
-const BLACK = '#000000';
-const GRAY  = '#6D6D72';
-const GRAY2 = '#C7C7CC';
-const GRAY3 = '#E5E5EA';
-const WHITE = '#FFFFFF';
-
 const DAY_LABELS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 
 export default function CalendarScreen({ navigation }) {
+  const { BG, CARD, BLACK, GRAY, GRAY3 } = useTheme();
+  const styles = makeStyles({ BG, CARD, BLACK, GRAY, GRAY3 });
   const today     = new Date();
   const [year,    setYear]    = useState(today.getFullYear());
   const [month,   setMonth]   = useState(today.getMonth()); // 0-indexed
@@ -183,61 +178,63 @@ export default function CalendarScreen({ navigation }) {
   );
 }
 
-const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: BG },
+function makeStyles({ BG, CARD, BLACK, GRAY, GRAY3 }) {
+  return StyleSheet.create({
+    container: { flex: 1, backgroundColor: BG },
 
-  header: {
-    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
-    paddingTop: 60, paddingHorizontal: 16, paddingBottom: 16,
-    borderBottomWidth: 1, borderColor: GRAY3,
-  },
-  backBtn: {
-    width: 40, height: 40, borderRadius: 20,
-    backgroundColor: CARD, justifyContent: 'center', alignItems: 'center',
-  },
-  headerTitle: { color: BLACK, fontSize: 17, fontWeight: '800' },
+    header: {
+      flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
+      paddingTop: 60, paddingHorizontal: 16, paddingBottom: 16,
+      borderBottomWidth: 1, borderColor: GRAY3,
+    },
+    backBtn: {
+      width: 40, height: 40, borderRadius: 20,
+      backgroundColor: CARD, justifyContent: 'center', alignItems: 'center',
+    },
+    headerTitle: { color: BLACK, fontSize: 17, fontWeight: '800' },
 
-  scrollContent: { paddingHorizontal: 16, paddingBottom: 48 },
+    scrollContent: { paddingHorizontal: 16, paddingBottom: 48 },
 
-  monthRow: {
-    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
-    paddingVertical: 20,
-  },
-  monthArrow: {
-    width: 38, height: 38, borderRadius: 19,
-    backgroundColor: CARD, justifyContent: 'center', alignItems: 'center',
-  },
-  monthLabel: { color: BLACK, fontSize: 18, fontWeight: '800' },
+    monthRow: {
+      flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
+      paddingVertical: 20,
+    },
+    monthArrow: {
+      width: 38, height: 38, borderRadius: 19,
+      backgroundColor: CARD, justifyContent: 'center', alignItems: 'center',
+    },
+    monthLabel: { color: BLACK, fontSize: 18, fontWeight: '800' },
 
-  dayLabelRow: { flexDirection: 'row' },
-  dayLabelCell:{ justifyContent: 'center', alignItems: 'center', paddingVertical: 6 },
-  dayLabelText:{ color: GRAY, fontSize: 12, fontWeight: '700' },
+    dayLabelRow: { flexDirection: 'row' },
+    dayLabelCell:{ justifyContent: 'center', alignItems: 'center', paddingVertical: 6 },
+    dayLabelText:{ color: GRAY, fontSize: 12, fontWeight: '700' },
 
-  grid: { flexDirection: 'row', flexWrap: 'wrap' },
+    grid: { flexDirection: 'row', flexWrap: 'wrap' },
 
-  cell: {
-    width: CELL_SIZE, height: CELL_SIZE,
-    justifyContent: 'center', alignItems: 'center',
-  },
-  cellToday: {
-    backgroundColor: CARD, borderRadius: CELL_SIZE / 2,
-  },
-  dayNum:      { color: BLACK, fontSize: 15, fontWeight: '600' },
-  dayNumToday: { fontWeight: '900' },
+    cell: {
+      width: CELL_SIZE, height: CELL_SIZE,
+      justifyContent: 'center', alignItems: 'center',
+    },
+    cellToday: {
+      backgroundColor: CARD, borderRadius: CELL_SIZE / 2,
+    },
+    dayNum:      { color: BLACK, fontSize: 15, fontWeight: '600' },
+    dayNumToday: { fontWeight: '900' },
 
-  dotSynced: {
-    width: 6, height: 6, borderRadius: 3,
-    backgroundColor: BLACK, marginTop: 3,
-  },
-  dotPending: {
-    width: 6, height: 6, borderRadius: 3,
-    borderWidth: 1.5, borderColor: BLACK, marginTop: 3,
-    backgroundColor: 'transparent',
-  },
+    dotSynced: {
+      width: 6, height: 6, borderRadius: 3,
+      backgroundColor: BLACK, marginTop: 3,
+    },
+    dotPending: {
+      width: 6, height: 6, borderRadius: 3,
+      borderWidth: 1.5, borderColor: BLACK, marginTop: 3,
+      backgroundColor: 'transparent',
+    },
 
-  legend: {
-    flexDirection: 'row', gap: 24, marginTop: 28, justifyContent: 'center',
-  },
-  legendItem: { flexDirection: 'row', alignItems: 'center', gap: 8 },
-  legendText: { color: GRAY, fontSize: 13 },
-});
+    legend: {
+      flexDirection: 'row', gap: 24, marginTop: 28, justifyContent: 'center',
+    },
+    legendItem: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+    legendText: { color: GRAY, fontSize: 13 },
+  });
+}
