@@ -637,8 +637,13 @@ export default function MapScreen({ navigation }) {
     }, GRACE_PERIOD_MS);
   }
   function isLunchBreak() { const h = new Date().getHours(); return h >= LUNCH_START && h < LUNCH_END; }
+  // Returns true if lat/lng falls within any saved pin, base location, or home location.
+  // Used by onIdleThresholdReached to suppress stop popups at known locations.
   function isNearSavedLocation(lat, lng) {
-    return savedLocations.some((l) => getDistance(lat, lng, l.latitude, l.longitude) < SAVED_LOCATION_RADIUS);
+    if (savedLocations.some((l) => getDistance(lat, lng, l.latitude, l.longitude) < SAVED_LOCATION_RADIUS)) return true;
+    if (baseLocation && getDistance(lat, lng, baseLocation.latitude, baseLocation.longitude) <= (baseLocation.radius ?? SAVED_LOCATION_RADIUS)) return true;
+    if (homeLocation && getDistance(lat, lng, homeLocation.latitude, homeLocation.longitude) <= (homeLocation.radius ?? SAVED_LOCATION_RADIUS)) return true;
+    return false;
   }
   function isInCooldownZone(lat, lng) {
     const now = Date.now();

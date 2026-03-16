@@ -16,10 +16,10 @@ auth_bp = Blueprint("auth", __name__)
 # Returns (expires_delta, expires_at_iso) based on current local time.
 # Before 18:00 → token lives until 18:00 today; at/after 18:00 → 5-hour session.
 def _token_expiry():
-    now    = datetime.now()
+    now    = datetime.utcnow()
     cutoff = now.replace(hour=18, minute=0, second=0, microsecond=0)
     delta  = (cutoff - now) if now < cutoff else timedelta(hours=5)
-    return delta, (now + delta).isoformat()
+    return delta, (now + delta).isoformat() + "Z"  # Z suffix → frontend parses as UTC
 
 
 # ── POST /api/auth/register ───────────────────────────────────────────────────
@@ -164,7 +164,7 @@ def me():
 
     # Read expiry from the live JWT so the frontend can reschedule its auto-logout timer
     exp_ts     = get_jwt().get("exp")
-    expires_at = datetime.fromtimestamp(exp_ts).isoformat() if exp_ts else None
+    expires_at = datetime.utcfromtimestamp(exp_ts).isoformat() + "Z" if exp_ts else None
 
     return jsonify(
         id=user["id"],
