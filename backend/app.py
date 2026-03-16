@@ -95,4 +95,4 @@ if __name__ == "__main__":
     init_db()   # ensure all tables exist before accepting requests
     port = int(os.getenv("PORT", 3000))
     print(f"Server running on port {port}")
-    socketio.run(app, host="0.0.0.0", port=port, debug=True)
+    socketio.run(app, host="0.0.0.0", port=port, debug=False)

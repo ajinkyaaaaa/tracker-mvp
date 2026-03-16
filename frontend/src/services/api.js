@@ -1,11 +1,12 @@
 // api.js — Centralised HTTP client for the VISPL backend
 // All screens talk to the backend exclusively through this module.
-// BASE_URL must match the machine running the Flask server (app.py).
-// Update the IP whenever your hotspot/network changes.
+// BASE_URL is read from EXPO_PUBLIC_API_URL (.env) → falls back to local hotspot IP.
+// To switch between Railway and local: set/unset EXPO_PUBLIC_API_URL in frontend/.env
 
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
-export const BASE_URL = 'http://172.20.10.3:3000/api';
+const _base = process.env.EXPO_PUBLIC_API_URL ?? 'http://172.20.10.3:3000';
+export const BASE_URL = _base.replace(/\/$/, '') + '/api';
 
 // Attaches the stored JWT to every request (set by AuthContext after login)
 async function getHeaders() {
