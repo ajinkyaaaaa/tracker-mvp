@@ -18,6 +18,7 @@ import MapView, { Marker, PROVIDER_GOOGLE } from 'react-native-maps';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { getStopsByDate, respondToStop } from '../services/localDatabase';
 import StopResponseModal from '../components/StopResponseModal';
+import NavPill           from '../components/NavPill';
 import { useTheme } from '../contexts/ThemeContext';
 
 const RED = '#FF3B30';
@@ -192,34 +193,13 @@ export default function ArchiveScreen({ navigation }) {
     <View style={styles.container}>
 
       {/* ── Nav Pill ── */}
-      <Animated.View style={[styles.navPill, { opacity: navAnim, backgroundColor: isDark ? 'rgba(255,255,255,0.15)' : 'rgba(0,0,0,0.92)' }]}>
-        {/* Home */}
-        <TouchableOpacity style={styles.navTab} onPress={() => navigation.navigate('Home')} activeOpacity={0.75}>
-          <View style={styles.navCapsule}>
-            <MaterialIcons name="near-me" size={20} color="rgba(255,255,255,0.65)" />
-          </View>
-        </TouchableOpacity>
-
-        {/* Archive — active */}
-        <View style={styles.navTab}>
-          <View style={[styles.navCapsule, styles.navCapsuleActive]}>
-            <MaterialIcons name="view-list" size={15} color={BLACK} />
-            <Text style={styles.navActiveLabel}>Archive</Text>
-            {pendingCount > 0 && (
-              <View style={styles.navBadge}>
-                <Text style={styles.navBadgeText}>{pendingCount}</Text>
-              </View>
-            )}
-          </View>
-        </View>
-
-        {/* Sync */}
-        <TouchableOpacity style={styles.navTab} onPress={() => navigation.navigate('Sync')} activeOpacity={0.75}>
-          <View style={styles.navCapsule}>
-            <MaterialIcons name="cloud-upload" size={20} color="rgba(255,255,255,0.65)" />
-          </View>
-        </TouchableOpacity>
-      </Animated.View>
+      <NavPill
+        activeTab="archive"
+        navigation={navigation}
+        pendingCount={pendingCount}
+        animValue={navAnim}
+        pillBg={isDark ? 'rgba(255,255,255,0.15)' : 'rgba(0,0,0,0.92)'}
+      />
 
       {/* ── List / Empty — section header lives inside scroll so nav pill never overlaps ── */}
       <Animated.View style={[{ flex: 1 }, { opacity: listOpAnim, transform: [{ translateY: listAnim }] }]}>
@@ -273,27 +253,6 @@ function makeStyles({ BG, CARD, BLACK, GRAY, GRAY2, GRAY3, WHITE }) {
   return StyleSheet.create({
     container: { flex: 1, backgroundColor: BG },
 
-    navPill: {
-      position: 'absolute', top: 56, left: 16, right: 16, zIndex: 10,
-      flexDirection: 'row', alignItems: 'center',
-      borderRadius: 100,
-      paddingVertical: 6, paddingHorizontal: 6,
-      shadowColor: '#000', shadowOffset: { width: 0, height: 4 },
-      shadowOpacity: 0.22, shadowRadius: 12, elevation: 8,
-    },
-    navTab:          { flex: 1, alignItems: 'center', justifyContent: 'center', paddingVertical: 2 },
-    navCapsule:      {
-      flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6,
-      paddingHorizontal: 14, paddingVertical: 8, borderRadius: 100, minWidth: 64,
-    },
-    navCapsuleActive: { backgroundColor: WHITE },
-    navActiveLabel:   { color: BLACK, fontSize: 14, fontWeight: '700' },
-    navBadge: {
-      backgroundColor: RED, borderRadius: 8,
-      minWidth: 16, height: 16, paddingHorizontal: 4,
-      justifyContent: 'center', alignItems: 'center',
-    },
-    navBadgeText: { color: WHITE, fontSize: 10, fontWeight: '900' },
 
     // 56 (pill top) + 6 (pill paddingTop) + 2 (navTab padding) + 8 (capsule padding) + 20 (icon) + 8 + 2 + 6 = 108px pill bottom; +18px gap
     sectionHeader: {

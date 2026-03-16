@@ -21,8 +21,13 @@
           "location",
           "fetch",
           "location",
+          "fetch",
+          "location",
+          "fetch",
+          "location",
           "fetch"
-        ]
+        ],
+        "ITSAppUsesNonExemptEncryption": false
       },
       "bundleIdentifier": "com.ajinkyaaaa.vispl-tracker"
     },
@@ -54,6 +59,11 @@
           "isAndroidForegroundServiceEnabled": true
         }
       ]
-    ]
+    ],
+    "extra": {
+      "eas": {
+        "projectId": "6449d585-0f0e-4d56-9356-823f119e82e7"
+      }
+    }
   }
 }

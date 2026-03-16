@@ -3,7 +3,7 @@
 // Calls initLocalDB() before rendering navigation to ensure the local SQLite DB is ready.
 // AppNavigator reads the user's role to decide which screen stack to show:
 //   No user  → LoginScreen
-//   Employee → EmployeeRoot (EmployeeTabs + CalendarScreen + DayLogScreen + Settings screens pushed on top)
+//   Employee → EmployeeRoot (EmployeeTabs[Home/Archive/Sync/Settings] + Calendar/DayLog/sub-settings pushed on top)
 //   Admin    → AdminRoot (AdminDashboardScreen + AdminBugReportsScreen)
 
 import { useState, useEffect }             from 'react';
@@ -30,6 +30,7 @@ import PasswordSecurityScreen    from './src/screens/settings/PasswordSecuritySc
 import NotificationsScreen       from './src/screens/settings/NotificationsScreen';
 import ThemeScreen               from './src/screens/settings/ThemeScreen';
 import ReportBugScreen           from './src/screens/settings/ReportBugScreen';
+import ScheduleScreen            from './src/screens/ScheduleScreen';
 
 const Stack         = createNativeStackNavigator();
 const EmployeeStack = createNativeStackNavigator();
@@ -37,18 +38,19 @@ const AdminStack    = createNativeStackNavigator();
 const Tab           = createBottomTabNavigator();
 
 // Employee tab navigator — tab bar hidden; navigation via custom floating pill.
-// Third tab "Sync" is accessible from the pill in MapScreen / ArchiveScreen / SyncScreen.
+// All 4 pill tabs (Home, Archive, Sync, Settings) live here so navigation between them always works.
 function EmployeeTabs() {
   return (
     <Tab.Navigator screenOptions={{ headerShown: false, tabBarStyle: { display: 'none' } }}>
-      <Tab.Screen name="Home"    component={MapScreen} />
-      <Tab.Screen name="Archive" component={ArchiveScreen} />
-      <Tab.Screen name="Sync"    component={SyncScreen} />
+      <Tab.Screen name="Home"     component={MapScreen} />
+      <Tab.Screen name="Archive"  component={ArchiveScreen} />
+      <Tab.Screen name="Sync"     component={SyncScreen} />
+      <Tab.Screen name="Settings" component={SettingsScreen} />
     </Tab.Navigator>
   );
 }
 
-// EmployeeRoot wraps EmployeeTabs in a nested stack so settings and other screens
+// EmployeeRoot wraps EmployeeTabs in a nested stack so sub-settings and other detail screens
 // can be pushed without leaving the employee context.
 function EmployeeRoot() {
   return (
@@ -56,13 +58,13 @@ function EmployeeRoot() {
       <EmployeeStack.Screen name="EmployeeTabs"         component={EmployeeTabs} />
       <EmployeeStack.Screen name="Calendar"             component={CalendarScreen} />
       <EmployeeStack.Screen name="DayLog"              component={DayLogScreen} />
-      <EmployeeStack.Screen name="Settings"             component={SettingsScreen} />
       <EmployeeStack.Screen name="ManageProfile"        component={ManageProfileScreen} />
       <EmployeeStack.Screen name="BaseLocationPin"      component={BaseLocationPinScreen} />
       <EmployeeStack.Screen name="PasswordSecurity"     component={PasswordSecurityScreen} />
       <EmployeeStack.Screen name="NotificationsSettings"component={NotificationsScreen} />
       <EmployeeStack.Screen name="ThemeSettings"        component={ThemeScreen} />
       <EmployeeStack.Screen name="ReportBug"            component={ReportBugScreen} />
+      <EmployeeStack.Screen name="Schedule"             component={ScheduleScreen} />
     </EmployeeStack.Navigator>
   );
 }

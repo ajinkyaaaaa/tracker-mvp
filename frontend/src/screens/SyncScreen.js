@@ -23,6 +23,7 @@ import {
   upsertSyncLog, respondToStop,
 } from '../services/localDatabase';
 import StopResponseModal from '../components/StopResponseModal';
+import NavPill           from '../components/NavPill';
 import { useTheme } from '../contexts/ThemeContext';
 
 const { width } = Dimensions.get('window');
@@ -245,29 +246,12 @@ export default function SyncScreen({ navigation, route }) {
     <View style={styles.container}>
 
       {/* ── Nav Pill ── */}
-      <Animated.View style={[styles.navPill, { opacity: navAnim, backgroundColor: isDark ? 'rgba(255,255,255,0.15)' : 'rgba(0,0,0,0.92)' }]}>
-        {/* Home */}
-        <TouchableOpacity style={styles.navTab} onPress={() => navigation.navigate('Home')} activeOpacity={0.75}>
-          <View style={styles.navCapsule}>
-            <MaterialIcons name="near-me" size={20} color="rgba(255,255,255,0.65)" />
-          </View>
-        </TouchableOpacity>
-
-        {/* Archive */}
-        <TouchableOpacity style={styles.navTab} onPress={() => navigation.navigate('Archive')} activeOpacity={0.75}>
-          <View style={styles.navCapsule}>
-            <MaterialIcons name="view-list" size={20} color="rgba(255,255,255,0.65)" />
-          </View>
-        </TouchableOpacity>
-
-        {/* Sync — active */}
-        <View style={styles.navTab}>
-          <View style={[styles.navCapsule, styles.navCapsuleActive]}>
-            <MaterialIcons name="cloud-upload" size={15} color={BLACK} />
-            <Text style={styles.navActiveLabel}>Sync</Text>
-          </View>
-        </View>
-      </Animated.View>
+      <NavPill
+        activeTab="sync"
+        navigation={navigation}
+        animValue={navAnim}
+        pillBg={isDark ? 'rgba(255,255,255,0.15)' : 'rgba(0,0,0,0.92)'}
+      />
 
       <ScrollView
         style={styles.scroll}
@@ -386,21 +370,6 @@ function makeStyles({ BG, CARD, BLACK, GRAY, GRAY2, GRAY3, WHITE }) {
   return StyleSheet.create({
     container: { flex: 1, backgroundColor: BG },
 
-    navPill: {
-      position: 'absolute', top: 56, left: 16, right: 16, zIndex: 10,
-      flexDirection: 'row', alignItems: 'center',
-      borderRadius: 100,
-      paddingVertical: 6, paddingHorizontal: 6,
-      shadowColor: '#000', shadowOffset: { width: 0, height: 4 },
-      shadowOpacity: 0.22, shadowRadius: 12, elevation: 8,
-    },
-    navTab:          { flex: 1, alignItems: 'center', justifyContent: 'center', paddingVertical: 2 },
-    navCapsule:      {
-      flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6,
-      paddingHorizontal: 14, paddingVertical: 8, borderRadius: 100, minWidth: 64,
-    },
-    navCapsuleActive: { backgroundColor: WHITE },
-    navActiveLabel:   { color: BLACK, fontSize: 14, fontWeight: '700' },
 
     scroll:        { flex: 1 },
     scrollContent: { paddingTop: 126, paddingHorizontal: 20, paddingBottom: 48 },

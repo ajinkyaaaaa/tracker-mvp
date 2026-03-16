@@ -1,14 +1,16 @@
 // SettingsScreen.js — User settings root screen
-// Navigated to from MapScreen.js → ribbon settings icon → navigation.navigate('Settings')
+// Navigated to from NavPill → Settings tab across all employee screens
 // Sections: Account (Manage Profile, Password & Security, Notifications)
 //           Preferences (Theme)
 //           Support (Report a Bug)
 
+import { useState, useEffect, useRef }                        from 'react';
 import { View, Text, ScrollView, TouchableOpacity,
-         StyleSheet, SafeAreaView }                        from 'react-native';
-import { MaterialIcons }                                   from '@expo/vector-icons';
-import { useAuth }                                         from '../contexts/AuthContext';
-import { useTheme }                                        from '../contexts/ThemeContext';
+         StyleSheet, Animated }                               from 'react-native';
+import { MaterialIcons }                                      from '@expo/vector-icons';
+import { useAuth }                                            from '../contexts/AuthContext';
+import { useTheme }                                           from '../contexts/ThemeContext';
+import NavPill                                                from '../components/NavPill';
 
 const RED = '#FF3B30';
 
@@ -33,26 +35,31 @@ function SettingsRow({ icon, label, value, onPress, last }) {
   );
 }
 
-// Navigated to from MapScreen ribbon → settings icon
 // user from AuthContext; theme from ThemeContext.js
+// NavPill at top (activeTab="settings") provides navigation to other tabs
 export default function SettingsScreen({ navigation }) {
   const { user, logout } = useAuth();
   const { isDark, BG, CARD, BLACK, GRAY, GRAY2, GRAY3, WHITE } = useTheme();
   const styles = makeStyles({ BG, CARD, BLACK, GRAY, GRAY2, GRAY3, WHITE });
 
+  const navAnim = useRef(new Animated.Value(0)).current;
+  useEffect(() => {
+    Animated.timing(navAnim, { toValue: 1, duration: 350, useNativeDriver: true }).start();
+  }, []);
+
   const initials = (user?.name || 'U').split(' ').map(w => w[0]).join('').toUpperCase().slice(0, 2);
   const empCode  = `EMP-${String(user?.id || 0).padStart(3, '0')}`;
 
   return (
-    <SafeAreaView style={styles.safe}>
-      {/* Header */}
-      <View style={styles.header}>
-        <TouchableOpacity style={styles.backBtn} onPress={() => navigation.goBack()}>
-          <MaterialIcons name="arrow-back-ios" size={20} color={BLACK} />
-        </TouchableOpacity>
-        <Text style={styles.headerTitle}>Settings</Text>
-        <View style={styles.backBtn} />
-      </View>
+    <View style={styles.container}>
+
+      {/* ── Nav Pill ── */}
+      <NavPill
+        activeTab="settings"
+        navigation={navigation}
+        animValue={navAnim}
+        pillBg={isDark ? 'rgba(255,255,255,0.15)' : 'rgba(0,0,0,0.92)'}
+      />
 
       <ScrollView contentContainerStyle={styles.scroll} showsVerticalScrollIndicator={false}>
 
@@ -71,9 +78,9 @@ export default function SettingsScreen({ navigation }) {
         {/* Account */}
         <Text style={styles.sectionHeader}>ACCOUNT</Text>
         <View style={styles.sectionCard}>
-          <SettingsRow icon="person-outline"   label="Manage Profile"       onPress={() => navigation.navigate('ManageProfile')} />
-          <SettingsRow icon="lock-outline"     label="Password & Security"  onPress={() => navigation.navigate('PasswordSecurity')} />
-          <SettingsRow icon="notifications-none" label="Notifications"      onPress={() => navigation.navigate('NotificationsSettings')} last />
+          <SettingsRow icon="person-outline"     label="Manage Profile"      onPress={() => navigation.navigate('ManageProfile')} />
+          <SettingsRow icon="lock-outline"       label="Password & Security" onPress={() => navigation.navigate('PasswordSecurity')} />
+          <SettingsRow icon="notifications-none" label="Notifications"       onPress={() => navigation.navigate('NotificationsSettings')} last />
         </View>
 
         {/* Preferences */}
@@ -99,22 +106,16 @@ export default function SettingsScreen({ navigation }) {
         </View>
 
       </ScrollView>
-    </SafeAreaView>
+    </View>
   );
 }
 
 function makeStyles({ BG, CARD, BLACK, GRAY, GRAY2, GRAY3, WHITE }) {
   return StyleSheet.create({
-  safe:   { flex: 1, backgroundColor: BG },
-  header: {
-    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
-    paddingHorizontal: 16, paddingVertical: 14,
-    borderBottomWidth: 1, borderBottomColor: GRAY3,
-  },
-  backBtn:     { width: 36, alignItems: 'flex-start' },
-  headerTitle: { color: BLACK, fontSize: 17, fontWeight: '700' },
+  container: { flex: 1, backgroundColor: BG },
 
-  scroll: { paddingHorizontal: 16, paddingTop: 24, paddingBottom: 48 },
+  // paddingTop clears the nav pill (top 56 + ~52px pill height + 18px gap)
+  scroll: { paddingHorizontal: 16, paddingTop: 126, paddingBottom: 48 },
 
   // User card
   userCard: {
