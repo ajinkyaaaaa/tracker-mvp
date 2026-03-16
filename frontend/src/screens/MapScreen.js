@@ -306,9 +306,9 @@ export default function MapScreen({ navigation }) {
     }
   });
 
-  // Location the user is currently inside — includes name, icon, category label for the status card
-  // liveGpsPoint is set immediately on mount from getCurrentLocation() so the dot shows before SQLite drains
-  const liveCoord = path.length > 0 ? path[path.length - 1] : liveGpsPoint;
+  // liveGpsPoint is always the freshest real GPS fix (set by initTracking / reacquireLocation / drain).
+  // path[last] is only used as a fallback before the first GPS fix arrives.
+  const liveCoord = liveGpsPoint ?? (path.length > 0 ? path[path.length - 1] : null);
   const currentPlace = (() => {
     if (!liveCoord) return null;
     if (baseLocation && getDistance(liveCoord.latitude, liveCoord.longitude,
@@ -425,10 +425,6 @@ export default function MapScreen({ navigation }) {
     }, [])
   );
 
-  // Keep liveLocRef current so mark-location and idle detection always have the latest position
-  useEffect(() => {
-    if (path.length > 0) liveLocRef.current = path[path.length - 1];
-  }, [path]);
 
   // ── Login time ────────────────────────────────────────────────────────────
   function parseLoginDate(ts) {
@@ -550,17 +546,23 @@ export default function MapScreen({ navigation }) {
   }
 
   // Moves GPS points from AsyncStorage cache → local SQLite, then refreshes the map trail.
-  // Replaces the old syncLocations() which posted directly to /api/locations/sync.
+  // Also updates liveGpsPoint + liveLocRef with the most recent cached fix so the live dot
+  // always reflects the latest background position, not a stale trail point.
   async function drainCacheToSQLite() {
     try {
       const cached = await getCachedLocations();
       if (cached.length === 0) return;
-      for (const point of cached) {
+      // Most recent background GPS fix → update live dot immediately
+      const latest = cached[cached.length - 1];
+      const point  = { latitude: latest.latitude, longitude: latest.longitude };
+      setLiveGpsPoint(point);
+      liveLocRef.current = point;
+      for (const p of cached) {
         await insertLocation({
-          latitude:    point.latitude,
-          longitude:   point.longitude,
-          recorded_at: point.recorded_at,
-          date:        point.recorded_at.slice(0, 10),
+          latitude:    p.latitude,
+          longitude:   p.longitude,
+          recorded_at: p.recorded_at,
+          date:        p.recorded_at.slice(0, 10),
         });
       }
       await clearCachedLocations();

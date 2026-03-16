@@ -25,6 +25,14 @@
           "location",
           "fetch",
           "location",
+          "fetch",
+          "location",
+          "fetch",
+          "location",
+          "fetch",
+          "location",
+          "fetch",
+          "location",
           "fetch"
         ],
         "ITSAppUsesNonExemptEncryption": false
@@ -39,6 +47,11 @@
         "monochromeImage": "./assets/android-icon-monochrome.png"
       },
       "permissions": [
+        "android.permission.ACCESS_COARSE_LOCATION",
+        "android.permission.ACCESS_FINE_LOCATION",
+        "android.permission.ACCESS_BACKGROUND_LOCATION",
+        "android.permission.FOREGROUND_SERVICE",
+        "android.permission.FOREGROUND_SERVICE_LOCATION",
         "android.permission.ACCESS_COARSE_LOCATION",
         "android.permission.ACCESS_FINE_LOCATION",
         "android.permission.ACCESS_BACKGROUND_LOCATION",
@@ -65,6 +78,14 @@
       "eas": {
         "projectId": "6449d585-0f0e-4d56-9356-823f119e82e7"
       }
+    },
+    "runtimeVersion": {
+      "policy": "appVersion"
+    },
+    "updates": {
+      "url": "https://u.expo.dev/6449d585-0f0e-4d56-9356-823f119e82e7",
+      "checkAutomatically": "ON_LOAD",
+      "fallbackToCacheTimeout": 0
     }
   }
 }
