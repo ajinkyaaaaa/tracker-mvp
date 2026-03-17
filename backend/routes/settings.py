@@ -52,7 +52,8 @@ def update_login_deadline():
     conn = get_db()
     try:
         conn.execute(
-            "INSERT OR REPLACE INTO company_settings (key, value) VALUES ('login_deadline', ?)",
+            "INSERT INTO company_settings (key, value) VALUES ('login_deadline', %s) "
+            "ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value",
             (deadline,)
         )
         conn.commit()

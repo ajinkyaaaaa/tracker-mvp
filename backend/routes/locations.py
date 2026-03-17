@@ -27,7 +27,8 @@ def sync():
     try:
         for loc in locations:
             db.execute(
-                "INSERT INTO locations (user_id, latitude, longitude, recorded_at) VALUES (?, ?, ?, ?)",
+                "INSERT INTO locations (user_id, latitude, longitude, recorded_at) "
+                "VALUES (%s, %s, %s, %s) ON CONFLICT DO NOTHING",
                 (user_id, loc["latitude"], loc["longitude"], loc["recorded_at"]),
             )
         db.commit()
@@ -50,7 +51,7 @@ def today():
     db      = get_db()
     rows    = db.execute(
         "SELECT latitude, longitude, recorded_at FROM locations "
-        "WHERE user_id = ? AND date(recorded_at) = date('now') ORDER BY recorded_at ASC",
+        "WHERE user_id = %s AND recorded_at::DATE = CURRENT_DATE ORDER BY recorded_at ASC",
         (user_id,),
     ).fetchall()
     db.close()
@@ -67,7 +68,7 @@ def history(date):
     db      = get_db()
     rows    = db.execute(
         "SELECT latitude, longitude, recorded_at FROM locations "
-        "WHERE user_id = ? AND date(recorded_at) = date(?) ORDER BY recorded_at ASC",
+        "WHERE user_id = %s AND recorded_at::DATE = %s::DATE ORDER BY recorded_at ASC",
         (user_id, date),
     ).fetchall()
     db.close()

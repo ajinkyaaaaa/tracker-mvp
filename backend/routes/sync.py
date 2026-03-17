@@ -3,11 +3,11 @@
 # Each POST stamps user_sync_log so CalendarScreen can show which days are synced.
 #
 # POST /api/sync/locations — {date, locations:[{latitude,longitude,recorded_at}]}
-#   → bulk INSERT OR IGNORE into locations; stamp user_sync_log
+#   → bulk INSERT ON CONFLICT DO NOTHING into locations; stamp user_sync_log
 # POST /api/sync/stops     — {date, stops:[{arrived_at,triggered_at,...}]}
-#   → bulk INSERT OR IGNORE into activity_logs; stamp user_sync_log
+#   → bulk INSERT ON CONFLICT DO NOTHING into activity_logs; stamp user_sync_log
 # POST /api/sync/visits    — {date, visits:[{saved_location_name,...}]}
-#   → bulk INSERT OR IGNORE into client_visits; stamp user_sync_log
+#   → bulk INSERT ON CONFLICT DO NOTHING into client_visits; stamp user_sync_log
 # GET  /api/sync/status    — returns [{date, synced_at}] for last 90 days
 #   → consumed by CalendarScreen.js on mount
 
@@ -22,7 +22,8 @@ sync_bp = Blueprint('sync', __name__)
 def _stamp_sync_log(conn, user_id, date):
     """Upsert a sync log row for this user+date — called by every POST endpoint."""
     conn.execute(
-        "INSERT OR REPLACE INTO user_sync_log (user_id, date, synced_at) VALUES (?, ?, ?)",
+        "INSERT INTO user_sync_log (user_id, date, synced_at) VALUES (%s, %s, %s) "
+        "ON CONFLICT (user_id, date) DO UPDATE SET synced_at = EXCLUDED.synced_at",
         (user_id, date, datetime.utcnow().isoformat())
     )
 
@@ -33,7 +34,7 @@ def _stamp_sync_log(conn, user_id, date):
 @sync_bp.route('/locations', methods=['POST'])
 @jwt_required()
 def sync_locations():
-    user_id   = get_jwt_identity()
+    user_id   = int(get_jwt_identity())
     data      = request.get_json()
     date      = data.get('date')
     locations = data.get('locations', [])
@@ -44,7 +45,8 @@ def sync_locations():
             for loc in locations
         ]
         conn.executemany(
-            "INSERT OR IGNORE INTO locations (user_id, latitude, longitude, recorded_at) VALUES (?, ?, ?, ?)",
+            "INSERT INTO locations (user_id, latitude, longitude, recorded_at) "
+            "VALUES (%s, %s, %s, %s) ON CONFLICT DO NOTHING",
             rows
         )
         _stamp_sync_log(conn, user_id, date)
@@ -60,7 +62,7 @@ def sync_locations():
 @sync_bp.route('/stops', methods=['POST'])
 @jwt_required()
 def sync_stops():
-    user_id = get_jwt_identity()
+    user_id = int(get_jwt_identity())
     data    = request.get_json()
     date    = data.get('date')
     stops   = data.get('stops', [])
@@ -79,9 +81,9 @@ def sync_stops():
             for s in stops
         ]
         conn.executemany(
-            """INSERT OR IGNORE INTO activity_logs
-               (user_id, latitude, longitude, triggered_at, dwell_duration, status, response, responded_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+            "INSERT INTO activity_logs "
+            "(user_id, latitude, longitude, triggered_at, dwell_duration, status, response, responded_at) "
+            "VALUES (%s, %s, %s, %s, %s, %s, %s, %s) ON CONFLICT DO NOTHING",
             rows
         )
         _stamp_sync_log(conn, user_id, date)
@@ -97,7 +99,7 @@ def sync_stops():
 @sync_bp.route('/visits', methods=['POST'])
 @jwt_required()
 def sync_visits():
-    user_id = get_jwt_identity()
+    user_id = int(get_jwt_identity())
     data    = request.get_json()
     date    = data.get('date')
     visits  = data.get('visits', [])
@@ -114,10 +116,10 @@ def sync_visits():
             for v in visits
         ]
         conn.executemany(
-            """INSERT OR IGNORE INTO client_visits
-               (user_id, saved_location_name, saved_location_cat, latitude, longitude,
-                arrived_at, dwell_duration, date)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+            "INSERT INTO client_visits "
+            "(user_id, saved_location_name, saved_location_cat, latitude, longitude, "
+            "arrived_at, dwell_duration, date) "
+            "VALUES (%s, %s, %s, %s, %s, %s, %s, %s) ON CONFLICT DO NOTHING",
             rows
         )
         _stamp_sync_log(conn, user_id, date)
@@ -129,19 +131,19 @@ def sync_visits():
 
 # POST /api/sync/login-sessions
 # Receives: {sessions:[{login_time}]} from SyncScreen → api.syncBulkLoginSessions()
-# INSERT OR IGNORE into login_logs — safe to re-sync; server record already exists from actual login
+# INSERT ON CONFLICT DO NOTHING into login_logs — safe to re-sync; server record already exists from actual login
 # Returns: {inserted: N}
 @sync_bp.route('/login-sessions', methods=['POST'])
 @jwt_required()
 def sync_login_sessions():
-    user_id  = get_jwt_identity()
+    user_id  = int(get_jwt_identity())
     data     = request.get_json()
     sessions = data.get('sessions', [])
     conn = get_db()
     try:
         rows = [(user_id, s['login_time']) for s in sessions]
         conn.executemany(
-            "INSERT OR IGNORE INTO login_logs (user_id, login_time) VALUES (?, ?)",
+            "INSERT INTO login_logs (user_id, login_time) VALUES (%s, %s) ON CONFLICT DO NOTHING",
             rows
         )
         conn.commit()
@@ -155,12 +157,13 @@ def sync_login_sessions():
 @sync_bp.route('/login-history', methods=['GET'])
 @jwt_required()
 def login_history():
-    user_id = get_jwt_identity()
+    user_id = int(get_jwt_identity())
     cutoff  = (datetime.utcnow() - timedelta(days=90)).date().isoformat()
     conn = get_db()
     try:
         rows = conn.execute(
-            "SELECT login_time, logout_time FROM login_logs WHERE user_id = ? AND login_time >= ? ORDER BY login_time DESC",
+            "SELECT login_time, logout_time FROM login_logs "
+            "WHERE user_id = %s AND login_time >= %s ORDER BY login_time DESC",
             (user_id, cutoff)
         ).fetchall()
         return jsonify([dict(r) for r in rows])
@@ -173,12 +176,13 @@ def login_history():
 @sync_bp.route('/status', methods=['GET'])
 @jwt_required()
 def sync_status():
-    user_id = get_jwt_identity()
+    user_id = int(get_jwt_identity())
     cutoff  = (datetime.utcnow() - timedelta(days=90)).date().isoformat()
     conn = get_db()
     try:
         rows = conn.execute(
-            "SELECT date, synced_at FROM user_sync_log WHERE user_id = ? AND date >= ? ORDER BY date DESC",
+            "SELECT date, synced_at FROM user_sync_log "
+            "WHERE user_id = %s AND date >= %s ORDER BY date DESC",
             (user_id, cutoff)
         ).fetchall()
         return jsonify([dict(r) for r in rows])

@@ -25,11 +25,11 @@ def report_bug():
 
     db = get_db()
     cursor = db.execute(
-        "INSERT INTO bug_reports (user_id, description) VALUES (?, ?)",
+        "INSERT INTO bug_reports (user_id, description) VALUES (%s, %s) RETURNING id",
         (user_id, description),
     )
     db.commit()
-    report_id = cursor.lastrowid
+    report_id = cursor.fetchone()["id"]
     db.close()
 
     return jsonify(message="Bug report submitted", id=report_id), 201
@@ -69,7 +69,7 @@ def resolve_bug(report_id):
         return jsonify(error="Admin access required"), 403
 
     db = get_db()
-    db.execute("UPDATE bug_reports SET status = 'resolved' WHERE id = ?", (report_id,))
+    db.execute("UPDATE bug_reports SET status = 'resolved' WHERE id = %s", (report_id,))
     db.commit()
     db.close()
 

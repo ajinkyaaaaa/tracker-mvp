@@ -55,7 +55,7 @@ export async function startTracking() {
   if (isTracking) return;
 
   await Location.startLocationUpdatesAsync(LOCATION_TASK, {
-    accuracy:                       Location.Accuracy.High,
+    accuracy:                       Location.Accuracy.Balanced,
     timeInterval:                   30000,  // minimum 30 s between updates
     distanceInterval:               10,     // or 10 m of movement — whichever fires first
     deferredUpdatesInterval:        60000,  // batch delivery hint to OS
@@ -88,10 +88,17 @@ export async function clearCachedLocations() {
 }
 
 // ── getCurrentLocation ────────────────────────────────────────────────────────
-// One-shot high-accuracy fix used by MapScreen.js for recentring, idle detection,
-// marking a location, and navigating (openInMaps).
+// One-shot fix used by MapScreen.js for recentring, idle detection, and mark-location.
+// Strategy: last known position (instant, ≤5 min old) → fresh Balanced fix (≤10 s timeout).
+// Avoids hanging on a cold High-accuracy GPS lock which can take 30+ s on Android.
 export async function getCurrentLocation() {
   const { status } = await Location.requestForegroundPermissionsAsync();
   if (status !== 'granted') return null;
-  return Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.High });
+
+  // Try last known fix first — instant if the OS has a recent position cached
+  const last = await Location.getLastKnownPositionAsync({ maxAge: 300000, requiredAccuracy: 200 }).catch(() => null);
+  if (last) return last;
+
+  // Fall back to a fresh fix; Balanced is faster than High and accurate enough for the map
+  return Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced, timeout: 10000 }).catch(() => null);
 }

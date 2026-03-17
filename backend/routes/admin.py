@@ -58,7 +58,7 @@ def live():
             SELECT user_id, latitude, longitude, recorded_at,
                    ROW_NUMBER() OVER (PARTITION BY user_id ORDER BY recorded_at DESC) as rn
             FROM locations
-            WHERE date(recorded_at) = date('now')
+            WHERE recorded_at::DATE = CURRENT_DATE
         ) l ON u.id = l.user_id AND l.rn = 1
         WHERE u.role = 'employee' AND u.is_online = 1
     """).fetchall()
@@ -80,7 +80,7 @@ def employee_locations(user_id, date):
     db   = get_db()
     rows = db.execute(
         "SELECT latitude, longitude, recorded_at FROM locations "
-        "WHERE user_id = ? AND date(recorded_at) = date(?) ORDER BY recorded_at ASC",
+        "WHERE user_id = %s AND recorded_at::DATE = %s::DATE ORDER BY recorded_at ASC",
         (user_id, date),
     ).fetchall()
     db.close()
@@ -101,7 +101,7 @@ def employee_activities(user_id, date):
     db   = get_db()
     rows = db.execute(
         "SELECT id, latitude, longitude, description, triggered_at FROM activity_logs "
-        "WHERE user_id = ? AND date(triggered_at) = date(?) ORDER BY triggered_at ASC",
+        "WHERE user_id = %s AND triggered_at::DATE = %s::DATE ORDER BY triggered_at ASC",
         (user_id, date),
     ).fetchall()
     db.close()

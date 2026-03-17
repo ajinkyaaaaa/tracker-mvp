@@ -35,11 +35,11 @@ def create():
     cursor = db.execute(
         "INSERT INTO activity_logs "
         "(user_id, latitude, longitude, description, triggered_at, dwell_duration, status, response) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        "VALUES (%s, %s, %s, %s, %s, %s, %s, %s) RETURNING id",
         (user_id, latitude, longitude, description, triggered_at, dwell_duration, status, response),
     )
     db.commit()
-    activity_id = cursor.lastrowid
+    activity_id = cursor.fetchone()["id"]
     db.close()
 
     return jsonify(id=activity_id, message="Activity logged"), 201
@@ -62,8 +62,8 @@ def respond(activity_id):
     db = get_db()
     db.execute(
         "UPDATE activity_logs "
-        "SET response = ?, status = 'completed', responded_at = datetime('now') "
-        "WHERE id = ? AND user_id = ?",
+        "SET response = %s, status = 'completed', responded_at = NOW() "
+        "WHERE id = %s AND user_id = %s",
         (response_text, activity_id, user_id),
     )
     db.commit()
@@ -81,7 +81,7 @@ def pending_count():
     db      = get_db()
     row     = db.execute(
         "SELECT COUNT(*) as count FROM activity_logs "
-        "WHERE user_id = ? AND status = 'pending' AND date(triggered_at) = date('now')",
+        "WHERE user_id = %s AND status = 'pending' AND triggered_at::DATE = CURRENT_DATE",
         (user_id,),
     ).fetchone()
     db.close()
@@ -100,7 +100,7 @@ def today():
         "SELECT id, latitude, longitude, description, triggered_at, "
         "dwell_duration, status, response, responded_at "
         "FROM activity_logs "
-        "WHERE user_id = ? AND date(triggered_at) = date('now') ORDER BY triggered_at DESC",
+        "WHERE user_id = %s AND triggered_at::DATE = CURRENT_DATE ORDER BY triggered_at DESC",
         (user_id,),
     ).fetchall()
     db.close()
@@ -119,7 +119,7 @@ def history(date):
         "SELECT id, latitude, longitude, description, triggered_at, "
         "dwell_duration, status, response, responded_at "
         "FROM activity_logs "
-        "WHERE user_id = ? AND date(triggered_at) = date(?) ORDER BY triggered_at DESC",
+        "WHERE user_id = %s AND triggered_at::DATE = %s::DATE ORDER BY triggered_at DESC",
         (user_id, date),
     ).fetchall()
     db.close()

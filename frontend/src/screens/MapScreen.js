@@ -1364,9 +1364,9 @@ const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: BG },
 
 
-  // Login time widget — slim Apple-style pill below the nav pill
+  // Login time widget — slim Apple-style pill, 12 px below NavPill bottom (~104 px)
   loginWidget: {
-    position: 'absolute', top: 110, left: 16, right: 16, zIndex: 10,
+    position: 'absolute', top: 116, left: 16, right: 16, zIndex: 10,
     flexDirection: 'row', alignItems: 'center', gap: 14,
     borderRadius: 18, height: 60, paddingHorizontal: 16,
     borderWidth: 1,
@@ -1384,7 +1384,7 @@ const styles = StyleSheet.create({
   },
 
   loginStatusPopup: {
-    position: 'absolute', top: 182, left: 16, zIndex: 20,
+    position: 'absolute', top: 188, left: 16, zIndex: 20,
     flexDirection: 'row', alignItems: 'center', gap: 8,
     backgroundColor: WHITE, borderRadius: 12,
     paddingHorizontal: 14, paddingVertical: 10,
@@ -1396,9 +1396,9 @@ const styles = StyleSheet.create({
   loginStatusText: { fontSize: 14, fontWeight: '800' },
   loginStatusSub:  { fontSize: 12, color: GRAY },
 
-  // You're at / Moving card — centred above the bottom ribbon
+  // You're at / Moving card — 12 px above the action row (bottom: 36 + ~54 px height + 12 = 102)
   atCard: {
-    position: 'absolute', bottom: 114, left: 16, right: 16,
+    position: 'absolute', bottom: 102, left: 16, right: 16,
     backgroundColor: BLACK, borderRadius: 20,
     paddingHorizontal: 16, paddingVertical: 14,
     shadowColor: '#000', shadowOffset: { width: 0, height: 6 },
@@ -1434,9 +1434,9 @@ const styles = StyleSheet.create({
   weekBoxToday: { borderWidth: 2 },
   weekBoxLabel: { fontSize: 9, fontWeight: '800' },
 
-  // Floating map control buttons — right side (recenter + satellite)
+  // Floating map control buttons — right side, 12 px above atCard top edge (~102 + 72 + 12 = 186)
   mapControls: {
-    position: 'absolute', right: 16, bottom: 270,
+    position: 'absolute', right: 16, bottom: 186,
     gap: 10,
   },
   mapControlBtn: {

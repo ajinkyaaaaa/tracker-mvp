@@ -30,11 +30,11 @@ def create():
     db     = get_db()
     cursor = db.execute(
         "INSERT INTO saved_locations (user_id, name, category, latitude, longitude) "
-        "VALUES (?, ?, ?, ?, ?)",
+        "VALUES (%s, %s, %s, %s, %s) RETURNING id",
         (user_id, name, category, latitude, longitude),
     )
     db.commit()
-    loc_id = cursor.lastrowid
+    loc_id = cursor.fetchone()["id"]
     db.close()
 
     return jsonify(id=loc_id, message="Location saved"), 201
@@ -51,7 +51,7 @@ def get_all():
     db      = get_db()
     rows    = db.execute(
         "SELECT id, name, category, latitude, longitude, created_at "
-        "FROM saved_locations WHERE user_id = ? ORDER BY created_at DESC",
+        "FROM saved_locations WHERE user_id = %s ORDER BY created_at DESC",
         (user_id,),
     ).fetchall()
     db.close()
@@ -67,7 +67,7 @@ def delete(loc_id):
     user_id = int(get_jwt_identity())
     db      = get_db()
     db.execute(
-        "DELETE FROM saved_locations WHERE id = ? AND user_id = ?",
+        "DELETE FROM saved_locations WHERE id = %s AND user_id = %s",
         (loc_id, user_id),
     )
     db.commit()
