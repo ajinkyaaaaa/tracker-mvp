@@ -77,15 +77,21 @@ export async function initLocalDB() {
     );
 
     CREATE TABLE IF NOT EXISTS local_login_sessions (
-      id         INTEGER PRIMARY KEY AUTOINCREMENT,
-      login_time TEXT    NOT NULL,
-      date       TEXT    NOT NULL,
-      synced     INTEGER DEFAULT 0,
-      synced_at  TEXT,
+      id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+      login_time          TEXT    NOT NULL,
+      date                TEXT    NOT NULL,
+      login_location_name TEXT,
+      login_location_cat  TEXT,
+      synced              INTEGER DEFAULT 0,
+      synced_at           TEXT,
       UNIQUE(login_time)
     );
     CREATE INDEX IF NOT EXISTS idx_lls_date ON local_login_sessions(date);
   `);
+
+  // Migrate existing installs — ignore errors if columns already exist
+  try { await db.execAsync('ALTER TABLE local_login_sessions ADD COLUMN login_location_name TEXT'); } catch {}
+  try { await db.execAsync('ALTER TABLE local_login_sessions ADD COLUMN login_location_cat  TEXT'); } catch {}
 }
 
 // ── Locations ──────────────────────────────────────────────────────────────────
@@ -256,6 +262,34 @@ export async function getLoginSessionsByDateRange(startDate, endDate) {
     'SELECT * FROM local_login_sessions WHERE date >= ? AND date <= ? ORDER BY login_time ASC',
     [startDate, endDate]
   );
+}
+
+// Saves the resolved login location for a date → called once by DayLogScreen after first GPS match
+// Avoids repeating the api.getSavedLocations() call on every screen visit
+export async function saveLoginLocation(date, name, cat) {
+  await db.runAsync(
+    'UPDATE local_login_sessions SET login_location_name = ?, login_location_cat = ? WHERE date = ?',
+    [name, cat, date]
+  );
+}
+
+// Wipes all local data — called by SettingsScreen after admin code verification
+// Clears GPS points, stops, visits, login sessions, and sync log; leaves schema intact
+export async function clearLocalDB() {
+  await db.execAsync(`
+    DELETE FROM local_locations;
+    DELETE FROM local_stops;
+    DELETE FROM local_client_visits;
+    DELETE FROM local_login_sessions;
+    DELETE FROM sync_log;
+  `);
+}
+
+// Returns the local SQLite DB size in MB → SyncScreen storage bar
+export async function getLocalDBSizeMB() {
+  const [{ page_count }] = await db.getAllAsync('PRAGMA page_count');
+  const [{ page_size }]  = await db.getAllAsync('PRAGMA page_size');
+  return (page_count * page_size) / (1024 * 1024);
 }
 
 // Returns dates with unsynced local data → CalendarScreen hollow dots

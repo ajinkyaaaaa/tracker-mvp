@@ -51,7 +51,7 @@ def today():
     db      = get_db()
     rows    = db.execute(
         "SELECT latitude, longitude, recorded_at FROM locations "
-        "WHERE user_id = %s AND recorded_at::DATE = CURRENT_DATE ORDER BY recorded_at ASC",
+        "WHERE user_id = %s AND LEFT(recorded_at, 10) = TO_CHAR(CURRENT_DATE, 'YYYY-MM-DD') ORDER BY recorded_at ASC",
         (user_id,),
     ).fetchall()
     db.close()
@@ -68,7 +68,7 @@ def history(date):
     db      = get_db()
     rows    = db.execute(
         "SELECT latitude, longitude, recorded_at FROM locations "
-        "WHERE user_id = %s AND recorded_at::DATE = %s::DATE ORDER BY recorded_at ASC",
+        "WHERE user_id = %s AND LEFT(recorded_at, 10) = %s ORDER BY recorded_at ASC",
         (user_id, date),
     ).fetchall()
     db.close()

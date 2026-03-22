@@ -86,10 +86,13 @@ export default function LoginScreen() {
     }
     setLoading(true);
     try {
-      const ok = await ensureLocationPermission();
-      if (!ok) { setLoading(false); return; }
-      if (isRegister) await register(name, email, password, role);
-      else            await login(email, password);
+      const loggedInUser = isRegister
+        ? await register(name, email, password, role)
+        : await login(email, password);
+      // Only request location permissions for employees — admins don't need tracking
+      if (loggedInUser?.role === 'employee') {
+        await ensureLocationPermission();
+      }
     } catch (err) {
       Alert.alert('Error', err.message);
     } finally {

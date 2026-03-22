@@ -11,6 +11,7 @@
 # GET  /api/sync/status    — returns [{date, synced_at}] for last 90 days
 #   → consumed by CalendarScreen.js on mount
 
+import os
 from flask import Blueprint, request, jsonify
 from flask_jwt_extended import jwt_required, get_jwt_identity
 from database import get_db
@@ -130,8 +131,9 @@ def sync_visits():
 
 
 # POST /api/sync/login-sessions
-# Receives: {sessions:[{login_time}]} from SyncScreen → api.syncBulkLoginSessions()
-# INSERT ON CONFLICT DO NOTHING into login_logs — safe to re-sync; server record already exists from actual login
+# Receives: {sessions:[{login_time, login_location_name, login_location_cat, date}]}
+#   from SyncScreen → api.syncBulkLoginSessions()
+# Upserts into login_logs including location; stamps user_sync_log per date
 # Returns: {inserted: N}
 @sync_bp.route('/login-sessions', methods=['POST'])
 @jwt_required()
@@ -141,13 +143,19 @@ def sync_login_sessions():
     sessions = data.get('sessions', [])
     conn = get_db()
     try:
-        rows = [(user_id, s['login_time']) for s in sessions]
-        conn.executemany(
-            "INSERT INTO login_logs (user_id, login_time) VALUES (%s, %s) ON CONFLICT DO NOTHING",
-            rows
-        )
+        for s in sessions:
+            conn.execute(
+                "INSERT INTO login_logs (user_id, login_time, login_location_name, login_location_cat) "
+                "VALUES (%s, %s, %s, %s) "
+                "ON CONFLICT (user_id, login_time) DO UPDATE SET "
+                "login_location_name = EXCLUDED.login_location_name, "
+                "login_location_cat  = EXCLUDED.login_location_cat",
+                (user_id, s['login_time'], s.get('login_location_name'), s.get('login_location_cat'))
+            )
+            if s.get('date'):
+                _stamp_sync_log(conn, user_id, s['date'])
         conn.commit()
-        return jsonify({'inserted': len(rows)})
+        return jsonify({'inserted': len(sessions)})
     finally:
         conn.close()
 
@@ -167,6 +175,53 @@ def login_history():
             (user_id, cutoff)
         ).fetchall()
         return jsonify([dict(r) for r in rows])
+    finally:
+        conn.close()
+
+
+# GET /api/sync/day-detail/<date>
+# Returns login sessions, GPS point count, stops, and visits for <date> (YYYY-MM-DD).
+# Consumed by DayLogScreen.js → loadDayData() when local SQLite has no data for a synced day.
+@sync_bp.route('/day-detail/<date>', methods=['GET'])
+@jwt_required()
+def day_detail(date):
+    user_id = int(get_jwt_identity())
+    conn = get_db()
+    try:
+        sessions = conn.execute(
+            "SELECT login_time, login_location_name, login_location_cat "
+            "FROM login_logs WHERE user_id = %s AND DATE(login_time) = %s::date ORDER BY login_time",
+            (user_id, date)
+        ).fetchall()
+        path_count = conn.execute(
+            "SELECT COUNT(*) AS cnt FROM locations WHERE user_id = %s AND LEFT(recorded_at, 10) = %s",
+            (user_id, date)
+        ).fetchone()['cnt']
+        # First GPS point of the day — used as fallback login coords when no named location was recorded
+        first_pt = conn.execute(
+            "SELECT latitude, longitude FROM locations "
+            "WHERE user_id = %s AND LEFT(recorded_at, 10) = %s ORDER BY recorded_at ASC LIMIT 1",
+            (user_id, date)
+        ).fetchone()
+        # triggered_at aliased as arrived_at so DayLogScreen.js parseDate(stop.arrived_at) works
+        stops = conn.execute(
+            "SELECT id, latitude, longitude, triggered_at AS arrived_at, "
+            "dwell_duration, status, response, responded_at "
+            "FROM activity_logs WHERE user_id = %s AND LEFT(triggered_at, 10) = %s ORDER BY triggered_at",
+            (user_id, date)
+        ).fetchall()
+        visits = conn.execute(
+            "SELECT saved_location_name, saved_location_cat, latitude, longitude, arrived_at, dwell_duration "
+            "FROM client_visits WHERE user_id = %s AND date = %s",
+            (user_id, date)
+        ).fetchall()
+        return jsonify({
+            'login_sessions': [dict(r) for r in sessions],
+            'path_count':     path_count,
+            'first_gps':      {'latitude': first_pt['latitude'], 'longitude': first_pt['longitude']} if first_pt else None,
+            'stops':          [dict(r) for r in stops],
+            'visits':         [dict(r) for r in visits],
+        })
     finally:
         conn.close()
 

@@ -44,16 +44,42 @@ This is also baked into `eas.json` for the `preview` and `production` build prof
 
 ---
 
+## What is a Dev Client Build?
+
+A dev client is a custom version of your app built specifically for development. Think of it as a replacement for Expo Go that is tailored to your exact project.
+
+**Why you can't use Expo Go:**
+
+| Reason | Detail |
+| ------ | ------ |
+| SDK version mismatch | This project uses Expo SDK 55. Expo Go on the App Store only supports the last 1–2 SDK versions. If your SDK is newer, Expo Go will refuse to open it. |
+| Background location | Expo Go sandboxes native features. Background GPS (used by this app) does not work inside Expo Go at all. |
+
+**The fix — build a dev client once:**
+```bash
+eas build --profile development --platform ios
+```
+EAS builds a custom `.ipa` with your full native config (permissions, background modes, etc.) and registers it to your device via ad-hoc distribution. Install it from the EAS dashboard link.
+
+**After that, hot reload works exactly like Expo Go:**
+```bash
+cd frontend
+npx expo start
+```
+Scan the QR → choose **development build** → full hot reload on every save. You only ever need to rebuild the dev client if you change native code (new package, `app.json` permissions, etc.). Pure JS changes never need a rebuild.
+
+---
+
 ## Getting the App on Your Phone (Dev)
 
-Once you have the dev client APK installed from `eas build --profile development`:
+Once you have the dev client installed from `eas build --profile development --platform ios`:
 
 ```bash
 cd frontend
-expo start
+npx expo start
 ```
 
-Scan the QR code in the Expo dev client app. Full hot reload, no rebuild needed. Equivalent to the old local tunnel setup — but only works while `expo start` is running on your machine.
+Scan the QR code → choose **development build**. Full hot reload, no rebuild needed. Only works while `npx expo start` is running on your machine.
 
 ---
 
@@ -115,6 +141,41 @@ eas submit --platform ios
 TestFlight shows it as a new build, existing testers are notified automatically, and the old broken build is superseded.
 
 Only wipe and start from scratch if you're changing the bundle ID or app name — otherwise a new build is all you need.
+
+---
+
+## Switching Between Local and Railway
+
+Only one file changes: `frontend/.env`
+
+### → Switch to Local
+
+```
+EXPO_PUBLIC_API_URL=http://192.168.x.x:3000
+```
+
+- Replace `192.168.x.x` with your machine's current IP: `ipconfig getifaddr en0`
+- Your phone and laptop must be on the **same Wi-Fi network**
+- Start the local backend: `cd backend && python app.py`
+- Start Expo: `cd frontend && npx expo start` → scan QR in dev client app
+
+### → Switch to Railway
+
+```
+EXPO_PUBLIC_API_URL=https://tracker-mvp-production.up.railway.app
+```
+
+- No backend to run locally — Railway handles it
+- Start Expo: `cd frontend && expo start` → scan QR in dev client app
+
+### What is and isn't affected
+
+| Thing                          | Affected by `.env` change? |
+| ------------------------------ | -------------------------- |
+| Expo Go / dev client (local)   | Yes — reads `.env` at `expo start` time |
+| EAS preview/production builds  | No — URL is baked in via `eas.json` env, always Railway |
+| Railway deployment             | No                         |
+| Backend code                   | No                         |
 
 ---
 

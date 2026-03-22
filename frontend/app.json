@@ -3,6 +3,7 @@
     "name": "VISPL Tracker",
     "slug": "vispl-tracker",
     "version": "1.0.0",
+    "newArchEnabled": false,
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "light",
@@ -17,24 +18,7 @@
         "NSLocationAlwaysAndWhenInUseUsageDescription": "VISPL needs your location to track your work trail during office hours.",
         "NSLocationWhenInUseUsageDescription": "VISPL needs your location to show your position on the map.",
         "NSLocationAlwaysUsageDescription": "VISPL needs background location access to track your work trail.",
-        "UIBackgroundModes": [
-          "location",
-          "fetch",
-          "location",
-          "fetch",
-          "location",
-          "fetch",
-          "location",
-          "fetch",
-          "location",
-          "fetch",
-          "location",
-          "fetch",
-          "location",
-          "fetch",
-          "location",
-          "fetch"
-        ],
+        "UIBackgroundModes": ["location", "fetch"],
         "ITSAppUsesNonExemptEncryption": false
       },
       "bundleIdentifier": "com.ajinkyaaaa.vispl-tracker"
@@ -51,14 +35,14 @@
         "android.permission.ACCESS_FINE_LOCATION",
         "android.permission.ACCESS_BACKGROUND_LOCATION",
         "android.permission.FOREGROUND_SERVICE",
-        "android.permission.FOREGROUND_SERVICE_LOCATION",
-        "android.permission.ACCESS_COARSE_LOCATION",
-        "android.permission.ACCESS_FINE_LOCATION",
-        "android.permission.ACCESS_BACKGROUND_LOCATION",
-        "android.permission.FOREGROUND_SERVICE",
         "android.permission.FOREGROUND_SERVICE_LOCATION"
       ],
-      "package": "com.ajinkyaaaa.vispltracker"
+      "package": "com.ajinkyaaaa.vispltracker",
+      "config": {
+        "googleMaps": {
+          "apiKey": "AIzaSyARE4Rkm8EW1ZXogZhlDxxmvb7KVd3fFX8"
+        }
+      }
     },
     "web": {
       "favicon": "./assets/favicon.png"

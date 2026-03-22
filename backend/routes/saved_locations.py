@@ -1,6 +1,7 @@
 # routes/saved_locations.py — Named location pin management
 # Employees mark notable spots (client sites, offices, etc.) from MapScreen.js.
 # These pins are loaded on map startup and suppress idle notifications when nearby.
+# Each pin stores an optional address string (from Google Places or GPS fallback).
 # Frontend entry point: src/services/api.js → api.saveLocation / api.getSavedLocations / api.deleteSavedLocation
 
 from flask import Blueprint, request, jsonify
@@ -11,9 +12,9 @@ saved_locations_bp = Blueprint("saved_locations", __name__)
 
 
 # ── POST /api/saved-locations ─────────────────────────────────────────────────
-# Receives: { name, category, latitude, longitude }
+# Receives: { name, category, latitude, longitude, radius, address }
 #   from api.js → api.saveLocation(), called in MapScreen.js → submitMarkLocation()
-# Saves the employee's current GPS position with a label and category icon.
+# Saves the employee's pinned location with a label, category, geofence radius, and optional address.
 @saved_locations_bp.route("/", methods=["POST"])
 @jwt_required()
 def create():
@@ -23,15 +24,17 @@ def create():
     category  = data.get("category", "other")
     latitude  = data.get("latitude")
     longitude = data.get("longitude")
+    radius    = data.get("radius", 100)
+    address   = data.get("address")
 
     if not name or latitude is None or longitude is None:
         return jsonify(error="name, latitude, and longitude are required"), 400
 
     db     = get_db()
     cursor = db.execute(
-        "INSERT INTO saved_locations (user_id, name, category, latitude, longitude) "
-        "VALUES (%s, %s, %s, %s, %s) RETURNING id",
-        (user_id, name, category, latitude, longitude),
+        "INSERT INTO saved_locations (user_id, name, category, latitude, longitude, radius, address) "
+        "VALUES (%s, %s, %s, %s, %s, %s, %s) RETURNING id",
+        (user_id, name, category, latitude, longitude, radius, address),
     )
     db.commit()
     loc_id = cursor.fetchone()["id"]
@@ -50,7 +53,7 @@ def get_all():
     user_id = int(get_jwt_identity())
     db      = get_db()
     rows    = db.execute(
-        "SELECT id, name, category, latitude, longitude, created_at "
+        "SELECT id, name, category, latitude, longitude, radius, address, created_at "
         "FROM saved_locations WHERE user_id = %s ORDER BY created_at DESC",
         (user_id,),
     ).fetchall()

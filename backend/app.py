@@ -4,7 +4,7 @@
 
 import os
 from datetime import timedelta
-from flask import Flask
+from flask import Flask, request
 from flask_cors import CORS
 from flask_socketio import SocketIO, emit, join_room
 from flask_jwt_extended import JWTManager, decode_token
@@ -18,6 +18,7 @@ from routes.saved_locations import saved_locations_bp
 from routes.sync import sync_bp
 from routes.settings import settings_bp
 from routes.bugs import bugs_bp
+from routes.profile import profile_bp
 
 load_dotenv()
 
@@ -39,6 +40,15 @@ app.register_blueprint(saved_locations_bp, url_prefix="/api/saved-locations")
 app.register_blueprint(sync_bp,            url_prefix="/api/sync")
 app.register_blueprint(settings_bp,        url_prefix="/api/settings")
 app.register_blueprint(bugs_bp,            url_prefix="/api/bugs")
+app.register_blueprint(profile_bp,         url_prefix="/api/profile")
+
+
+# ── Request logger ────────────────────────────────────────────────────────────
+# Prints method, path, and response status for every incoming HTTP request
+@app.after_request
+def log_request(response):
+    print(f"{request.method} {request.path} → {response.status_code}")
+    return response
 
 
 # ── Health check ──────────────────────────────────────────────────────────────

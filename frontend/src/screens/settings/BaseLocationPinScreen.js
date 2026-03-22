@@ -2,11 +2,11 @@
 // Step 1: Search address + pan map to place crosshair pin
 // Step 2: Pick geofence radius from 4 presets (50 / 100 / 150 / 200 m)
 //
-// Address search: Nominatim / OpenStreetMap (no API key required)
+// Address search: Google Places Autocomplete → Place Details for coordinates
 // On confirm → saves result to AsyncStorage '_geo_pending' then calls navigation.goBack()
 //   ManageProfileScreen reads '_geo_pending' in its focus listener
 //
-// route.params: { initialCoord, label, locationType ('base'|'home'), initialRadius }
+// route.params: { initialCoord, label, locationType ('base'|'home'), initialRadius, locationIndex (-1 = new) }
 
 import { useState, useRef, useEffect }                        from 'react';
 import { View, Text, TouchableOpacity, TextInput, StyleSheet,
@@ -19,35 +19,36 @@ import { useTheme }                                           from '../../contex
 
 const RADIUS_PRESETS = [50, 100, 150, 200];
 
-// Address search via Nominatim (OpenStreetMap — no API key required)
-// Passes countrycodes=in and a 1° viewbox centred on userCoord to bias results locally.
-// Profile pincode/state are appended to the query when available for extra precision.
-async function geocodeQuery(query, userCoord, profileHint) {
-  const hint = profileHint ? `, ${profileHint}` : '';
-  const q    = `${query}${hint}`;
-  let url    =
-    `https://nominatim.openstreetmap.org/search` +
-    `?q=${encodeURIComponent(q)}&format=json&limit=6&addressdetails=1&countrycodes=in`;
-  if (userCoord) {
-    const D = 1.0; // ~110 km box
-    url += `&viewbox=${userCoord.longitude - D},${userCoord.latitude - D},${userCoord.longitude + D},${userCoord.latitude + D}`;
-  }
-  const res  = await fetch(url, { headers: { 'User-Agent': 'VISPLTrackerApp/1.0' } });
+const PLACES_KEY = process.env.EXPO_PUBLIC_GOOGLE_PLACES_KEY;
+
+// Returns Google Places autocomplete predictions biased near coord
+async function googlePlacesSearch(query, coord) {
+  let url = `https://maps.googleapis.com/maps/api/place/autocomplete/json?input=${encodeURIComponent(query)}&key=${PLACES_KEY}&components=country:in&language=en`;
+  if (coord) url += `&location=${coord.latitude},${coord.longitude}&radius=50000`;
+  const res  = await fetch(url);
   const data = await res.json();
-  return data.map(r => ({
-    id:       r.place_id,
-    title:    r.name || r.display_name.split(',')[0].trim(),
-    subtitle: r.display_name,
-    latitude: parseFloat(r.lat),
-    longitude:parseFloat(r.lon),
+  return (data.predictions || []).map(p => ({
+    id:       p.place_id,
+    title:    p.structured_formatting?.main_text || p.description.split(',')[0],
+    subtitle: p.description,
+    placeId:  p.place_id,
   }));
+}
+
+// Fetches lat/lng for a Google place_id to animate the map there
+async function googlePlaceDetails(placeId) {
+  const url  = `https://maps.googleapis.com/maps/api/place/details/json?place_id=${placeId}&fields=geometry&key=${PLACES_KEY}`;
+  const res  = await fetch(url);
+  const data = await res.json();
+  const loc  = data.result?.geometry?.location;
+  return loc ? { latitude: loc.lat, longitude: loc.lng } : null;
 }
 
 export default function BaseLocationPinScreen({ navigation, route }) {
   const { BG, CARD, BLACK, GRAY, GRAY2, GRAY3, WHITE } = useTheme();
   const styles = makeStyles({ BG, CARD, BLACK, GRAY, GRAY2, GRAY3, WHITE });
 
-  const { initialCoord, label, locationType, initialRadius } = route.params;
+  const { initialCoord, label, locationType, initialRadius, locationIndex = -1 } = route.params;
 
   const [step,        setStep]        = useState(1);
   const [center,      setCenter]      = useState(initialCoord); // tracks map centre in step 1
@@ -60,50 +61,45 @@ export default function BaseLocationPinScreen({ navigation, route }) {
   const [results,     setResults]     = useState([]);
   const [searching,   setSearching]   = useState(false);
   const [showResults, setShowResults] = useState(false);
-  const [profileHint, setProfileHint] = useState(''); // "<pincode>, <state>" from saved profile
 
   const mapRef      = useRef(null);
   const searchTimer = useRef(null);
   const isBase      = locationType === 'base';
   const pinIcon     = isBase ? 'star' : 'home';
 
-  // Load pincode + state from profile for Nominatim locality bias
-  useEffect(() => {
-    AsyncStorage.getItem('user_profile_info').then(raw => {
-      if (!raw) return;
-      const d = JSON.parse(raw);
-      const parts = [d.pincode, d.state].filter(Boolean);
-      setProfileHint(parts.join(', '));
-    }).catch(() => {});
-  }, []);
-
-  // Debounced address search — fires 600 ms after user stops typing
-  // Passes current map centre (≈ user location) as viewbox + India country code
+  // Debounced Google Places search — fires 600 ms after user stops typing
   useEffect(() => {
     clearTimeout(searchTimer.current);
     if (query.length < 3) { setResults([]); setShowResults(false); return; }
     searchTimer.current = setTimeout(async () => {
       setSearching(true);
       try {
-        const r = await geocodeQuery(query, center, profileHint);
+        const r = await googlePlacesSearch(query, center);
         setResults(r);
         setShowResults(r.length > 0);
       } catch {}
       finally { setSearching(false); }
     }, 600);
     return () => clearTimeout(searchTimer.current);
-  }, [query, center, profileHint]);
+  }, [query, center]);
 
-  function selectResult(item) {
+  // Fetches Place Details for coordinates then animates map to that location
+  async function selectResult(item) {
     setQuery(item.title);
     setResults([]);
     setShowResults(false);
     Keyboard.dismiss();
-    const coord = { latitude: item.latitude, longitude: item.longitude };
-    setCenter(coord);
-    mapRef.current?.animateToRegion(
-      { ...coord, latitudeDelta: 0.003, longitudeDelta: 0.003 }, 500,
-    );
+    setSearching(true);
+    try {
+      const coord = await googlePlaceDetails(item.placeId);
+      if (coord) {
+        setCenter(coord);
+        mapRef.current?.animateToRegion(
+          { ...coord, latitudeDelta: 0.003, longitudeDelta: 0.003 }, 500,
+        );
+      }
+    } catch {}
+    setSearching(false);
   }
 
   function handleSetPin() {
@@ -127,6 +123,7 @@ export default function BaseLocationPinScreen({ navigation, route }) {
       pickedCoords: confirmed,
       pickedRadius: radius,
       locationType,
+      locationIndex,
     }));
     navigation.goBack();
   }
@@ -188,6 +185,11 @@ export default function BaseLocationPinScreen({ navigation, route }) {
                 </TouchableOpacity>
               )}
               ItemSeparatorComponent={() => <View style={styles.resultDivider} />}
+              ListFooterComponent={
+                <Text style={styles.poweredBy}>
+                  {Platform.OS === 'ios' ? 'Powered by Google Maps for iOS' : 'Powered by Google Maps for Android'}
+                </Text>
+              }
             />
           )}
         </View>
@@ -226,13 +228,15 @@ export default function BaseLocationPinScreen({ navigation, route }) {
           )}
         </MapView>
 
-        {/* Crosshair overlay — always visible, no Marker needed */}
+        {/* Crosshair overlay — shifted up so the dot tip aligns with map geographic centre */}
         <View pointerEvents="none" style={styles.crosshairWrap}>
-          <View style={[styles.crosshairPin, isBase ? styles.pinBase : styles.pinHome]}>
-            <MaterialIcons name={pinIcon} size={18} color={WHITE} />
+          <View style={styles.crosshairStack}>
+            <View style={[styles.crosshairPin, isBase ? styles.pinBase : styles.pinHome]}>
+              <MaterialIcons name={pinIcon} size={18} color={WHITE} />
+            </View>
+            <View style={styles.crosshairStem} />
+            <View style={styles.crosshairDot}  />
           </View>
-          <View style={styles.crosshairStem} />
-          <View style={styles.crosshairDot}  />
         </View>
       </View>
 
@@ -308,6 +312,7 @@ function makeStyles({ BG, CARD, BLACK, GRAY, GRAY2, GRAY3, WHITE }) { return Sty
   resultTitle:   { color: BLACK, fontSize: 14, fontWeight: '600' },
   resultSub:     { color: GRAY,  fontSize: 12, marginTop: 1 },
   resultDivider: { height: 1, backgroundColor: GRAY3, marginLeft: 44 },
+  poweredBy:     { color: GRAY2, fontSize: 10, textAlign: 'right', paddingHorizontal: 10, paddingVertical: 6 },
 
   mapWrap: { flex: 1, position: 'relative', overflow: 'hidden' },
 
@@ -315,6 +320,9 @@ function makeStyles({ BG, CARD, BLACK, GRAY, GRAY2, GRAY3, WHITE }) { return Sty
     position: 'absolute', top: 0, left: 0, right: 0, bottom: 0,
     justifyContent: 'center', alignItems: 'center',
   },
+  // Pin 44 + stem 12 + dot 6 = 62px total. Shift up by half (31px) so the dot tip
+  // sits exactly on the map's geographic centre coordinate.
+  crosshairStack: { alignItems: 'center', transform: [{ translateY: -31 }] },
   crosshairPin: {
     width: 44, height: 44, borderRadius: 22,
     justifyContent: 'center', alignItems: 'center',

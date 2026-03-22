@@ -1,34 +1,38 @@
 // MapScreen.js — Primary employee tracking screen
 // Shows a full-screen live map with today's GPS trail, saved location pins,
-// idle-stop detection, and a bottom panel for marking locations.
+// idle-stop detection, and a drop-pin overlay (step 1 of Register Location flow).
 // Also renders a login-time widget (below nav pill) with an "i" button
 // that opens LoginCalendarModal showing past login/logout history.
 //
 // Data flows (offline-first):
-//   locationService.js  → caches GPS points in AsyncStorage
+//   locationService.js  → caches GPS points in AsyncStorage (3 s outside geofence, 30 s inside)
 //   drainCacheToSQLite()→ every 60 s moves cache → localDatabase.js → local_locations
 //   localDatabase.js    → getTodayPath()          → Polyline on map
-//   GET /api/saved-locations → loadSavedLocations() → emoji markers + idle suppression
+//   AsyncStorage saved_locations_data → loadSavedLocations() → map pins + idle suppression
+//   syncAllGeofencesToTracking() → writes combined geofences to AsyncStorage for background task
+//   GET /api/settings/tracking-intervals → loadTrackingIntervals() → syncTrackingIntervals()
 //   idle detection → onIdleThresholdReached() → insertStop() / insertClientVisit() immediately → local DB only
 //   loginTime (AuthContext) → insertLoginSession() → local_login_sessions on mount
+//   handleConfirmPin() → navigation.navigate('RegisterLocation') → RegisterLocationScreen.js
 
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { useFocusEffect } from '@react-navigation/native';
 import {
-  View, Text, StyleSheet, TouchableOpacity, FlatList,
-  TextInput, Alert, Platform, AppState, ScrollView,
-  Animated, Dimensions, KeyboardAvoidingView,
-  ActivityIndicator, Keyboard,
+  View, Text, StyleSheet, TouchableOpacity,
+  Alert, Platform, AppState,
+  Animated,
+  ActivityIndicator,
 } from 'react-native';
 import MapView, { Marker, Circle, PROVIDER_GOOGLE } from 'react-native-maps';
 import * as Notifications from 'expo-notifications';
 import { MaterialIcons } from '@expo/vector-icons';
 import { useAuth } from '../contexts/AuthContext';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { api } from '../services/api';
+import { api }            from '../services/api';
 import {
-  startTracking, stopTracking, getCurrentLocation,
+  startTracking, stopTracking, getCurrentLocation, getFreshLocation,
   getCachedLocations, clearCachedLocations,
+  syncGeofences, syncTrackingIntervals,
 } from '../services/locationService';
 import {
   insertLocation, getTodayPath,
@@ -36,8 +40,6 @@ import {
   insertLoginSession, getLoginSessionsByDateRange,
 } from '../services/localDatabase';
 import NavPill from '../components/NavPill';
-
-const { width, height: SCREEN_HEIGHT } = Dimensions.get('window');
 
 const BG    = '#FFFFFF';
 const CARD  = '#F2F2F7';
@@ -75,36 +77,28 @@ const MUTE_RADIUS           = 25;
 const LUNCH_START = 13;
 const LUNCH_END   = 14;
 
-const CATEGORIES = [
-  { key: 'office',    label: 'Office',    icon: 'business' },
-  { key: 'client',    label: 'Client',    icon: 'people' },
-  { key: 'site',      label: 'Site',      icon: 'terrain' },
-  { key: 'warehouse', label: 'Warehouse', icon: 'warehouse' },
-  { key: 'home',      label: 'Home',      icon: 'home' },
-  { key: 'food',      label: 'Food',      icon: 'restaurant' },
-  { key: 'other',     label: 'Other',     icon: 'place' },
-];
-const CATEGORY_ICON = CATEGORIES.reduce((acc, c) => ({ ...acc, [c.key]: c.icon }), {});
-
-const MARK_RADIUS_PRESETS = [50, 100, 150, 200];
-
-// Nominatim address autocomplete — same provider as BaseLocationPinScreen (no API key)
-async function geocodeQuery(query, coord) {
-  let url = `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(query)}&format=json&limit=5&addressdetails=1&countrycodes=in`;
-  if (coord) {
-    const D = 1.0;
-    url += `&viewbox=${coord.longitude - D},${coord.latitude - D},${coord.longitude + D},${coord.latitude + D}`;
-  }
-  const res  = await fetch(url, { headers: { 'User-Agent': 'VISPLTrackerApp/1.0' } });
-  const data = await res.json();
-  return data.map(r => ({
-    id:        r.place_id,
-    title:     r.name || r.display_name.split(',')[0].trim(),
-    subtitle:  r.display_name,
-    latitude:  parseFloat(r.lat),
-    longitude: parseFloat(r.lon),
-  }));
+// Haversine distance in metres between two GPS coordinates
+function getDistance(lat1, lon1, lat2, lon2) {
+  const R = 6371e3, r1 = (lat1 * Math.PI) / 180, r2 = (lat2 * Math.PI) / 180;
+  const dLat = ((lat2 - lat1) * Math.PI) / 180, dLon = ((lon2 - lon1) * Math.PI) / 180;
+  const a = Math.sin(dLat / 2) ** 2 + Math.cos(r1) * Math.cos(r2) * Math.sin(dLon / 2) ** 2;
+  return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
 }
+
+const CATEGORIES = [
+  { key: 'client',    label: 'Client',    icon: 'people' },
+  { key: 'rest-stop', label: 'Rest stop', icon: 'pause' },
+  { key: 'site',      label: 'Site',      icon: 'factory' },
+];
+// Includes legacy keys so existing saved locations still display correct icons
+const CATEGORY_ICON = {
+  ...CATEGORIES.reduce((acc, c) => ({ ...acc, [c.key]: c.icon }), {}),
+  office:    'business',
+  warehouse: 'warehouse',
+  home:      'home',
+  food:      'restaurant',
+  other:     'place',
+};
 
 Notifications.setNotificationHandler({
   handleNotification: async () => ({
@@ -207,13 +201,34 @@ function LiveLocationMarker({ coordinate }) {
   });
 
   return (
-    <Marker coordinate={coordinate} anchor={{ x: 0.5, y: 0.5 }} tracksViewChanges>
+    <Marker coordinate={coordinate} anchor={{ x: 0.5, y: 0.5 }} tracksViewChanges zIndex={100}>
       <View style={{ width: 60, height: 60, justifyContent: 'center', alignItems: 'center' }}>
         <Animated.View style={ringStyle(ring1)} />
         <Animated.View style={ringStyle(ring2)} />
         <View style={styles.liveDot} />
       </View>
     </Marker>
+  );
+}
+
+// GlowSweepText — white italic word with a subtle opacity fade loop
+// Used for "away..." and "moving..." in the at-card status row
+function GlowSweepText({ label }) {
+  const fade = useRef(new Animated.Value(1)).current;
+
+  useEffect(() => {
+    Animated.loop(
+      Animated.sequence([
+        Animated.timing(fade, { toValue: 0.2, duration: 1000, useNativeDriver: true }),
+        Animated.timing(fade, { toValue: 1,   duration: 1000, useNativeDriver: true }),
+      ])
+    ).start();
+  }, []);
+
+  return (
+    <Animated.Text style={{ color: '#89ff33', fontStyle: 'italic', fontSize: 16, fontWeight: '800', letterSpacing: -0.3, opacity: fade }}>
+      {label}...
+    </Animated.Text>
   );
 }
 
@@ -236,22 +251,12 @@ export default function MapScreen({ navigation }) {
   const [path,             setPath]             = useState([]);
   const [region,           setRegion]           = useState(null);
   const [mapType,          setMapType]          = useState('standard');
-  // Mark-location overlay — 2-step: pin placement → radius selection
-  const [markMode,        setMarkMode]        = useState(false);
-  const [markStep,        setMarkStep]        = useState(1);
-  const [markCenter,      setMarkCenter]      = useState(null); // tracks map centre during step 1
-  const [markConfirmed,   setMarkConfirmed]   = useState(null); // locked after "Set Pin Here"
-  const [markRadius,      setMarkRadius]      = useState(100);
-  const [markName,        setMarkName]        = useState('');
-  const [markCategory,    setMarkCategory]    = useState('client');
-  const [markQuery,       setMarkQuery]       = useState('');
-  const [markResults,     setMarkResults]     = useState([]);
-  const [markSearching,   setMarkSearching]   = useState(false);
-  const [markShowResults, setMarkShowResults] = useState(false);
-  const [markSaving,      setMarkSaving]      = useState(false);
+  // Mark-location overlay — Step 1: drop pin, see live GPS coordinates
+  const [markMode,   setMarkMode]   = useState(false);
+  const [markCenter, setMarkCenter] = useState(null); // live map crosshair position (updates via onRegionChange)
   const [savedLocations,   setSavedLocations]   = useState([]);
-  const [baseLocation,     setBaseLocation]     = useState(null);  // { name, icon, latitude, longitude, radius }
-  const [homeLocation,     setHomeLocation]     = useState(null);  // { name, icon, latitude, longitude, radius }
+  const [baseLocations,    setBaseLocations]    = useState([]);  // Array<{ name, latitude, longitude, radius }>
+  const [homeLocations,    setHomeLocations]    = useState([]);  // Array<{ name, latitude, longitude, radius }>
   const [pendingCount,     setPendingCount]     = useState(0);
   const [weekLoginMap,     setWeekLoginMap]     = useState({});
   const [loginDeadline,    setLoginDeadline]    = useState(LOGIN_DEADLINE_DEFAULT); // "HH:MM"
@@ -261,18 +266,19 @@ export default function MapScreen({ navigation }) {
 
   const mapRef          = useRef(null);
   const appState        = useRef(AppState.currentState);
-  const markSearchTimer = useRef(null);
-  const markPanelAnim    = useRef(new Animated.Value(SCREEN_HEIGHT)).current; // starts off-screen
-  const markPanelOpacity = useRef(new Animated.Value(1)).current;
-  const markRibbonAnim   = useRef(new Animated.Value(0)).current;  // 0 = login widget, 1 = search bar
-  const markPinDropAnim  = useRef(new Animated.Value(-80)).current; // pin drop: starts above, springs to 0
+  const markCardAnim    = useRef(new Animated.Value(0)).current;    // step-1 bottom card fade/slide
+  const markPinDropAnim = useRef(new Animated.Value(-80)).current;  // crosshair drop animation
 
   const idleTimerRef         = useRef(null);
   const graceTimerRef        = useRef(null);
   const idleStartTimeRef     = useRef(null);
   const idleAnchorRef        = useRef(null);
   const notificationFiredRef = useRef(false);
+  const activeStopIdRef      = useRef(null);   // local DB id of the in-progress stop; null when idle
   const cooldownZonesRef     = useRef([]);
+  const movingResetRef       = useRef(null);
+
+  const [isMoving, setIsMoving] = useState(false);
 
   const navAnim = useRef(new Animated.Value(0)).current;
 
@@ -311,12 +317,12 @@ export default function MapScreen({ navigation }) {
   const liveCoord = liveGpsPoint ?? (path.length > 0 ? path[path.length - 1] : null);
   const currentPlace = (() => {
     if (!liveCoord) return null;
-    if (baseLocation && getDistance(liveCoord.latitude, liveCoord.longitude,
-        baseLocation.latitude, baseLocation.longitude) <= (baseLocation.radius ?? 100))
-      return { name: baseLocation.name || 'Base Location', icon: 'star', label: 'Base' };
-    if (homeLocation && getDistance(liveCoord.latitude, liveCoord.longitude,
-        homeLocation.latitude, homeLocation.longitude) <= (homeLocation.radius ?? 100))
-      return { name: homeLocation.name || 'Home', icon: 'home', label: 'Home' };
+    const base = baseLocations.find(b =>
+      getDistance(liveCoord.latitude, liveCoord.longitude, b.latitude, b.longitude) <= (b.radius ?? 100));
+    if (base) return { name: base.name || 'Base Location', icon: 'star', label: 'Base' };
+    const home = homeLocations.find(h =>
+      getDistance(liveCoord.latitude, liveCoord.longitude, h.latitude, h.longitude) <= (h.radius ?? 100));
+    if (home) return { name: home.name || 'Home', icon: 'home', label: 'Home' };
     const nearby = savedLocations.find(
       l => getDistance(liveCoord.latitude, liveCoord.longitude, l.latitude, l.longitude) < SAVED_LOCATION_RADIUS
     );
@@ -350,6 +356,28 @@ export default function MapScreen({ navigation }) {
     Animated.timing(navAnim, { toValue: 1, duration: 500, useNativeDriver: true }).start();
   }, []);
 
+
+  // Derive isMoving from each fresh GPS fix.
+  // If the new point is > 50 m from the current idle anchor the user is in transit.
+  // If a notification has already fired for this stop, calling resetIdleSession here
+  // finalizes the actual dwell time (arrival → now) before starting fresh detection.
+  useEffect(() => {
+    if (!liveGpsPoint || !idleAnchorRef.current) return;
+    const dist = getDistance(
+      idleAnchorRef.current.latitude, idleAnchorRef.current.longitude,
+      liveGpsPoint.latitude, liveGpsPoint.longitude,
+    );
+    if (dist > 50) {
+      setIsMoving(true);
+      clearTimeout(movingResetRef.current);
+      movingResetRef.current = setTimeout(() => setIsMoving(false), 90_000);
+      // Departure detected — finalize dwell + restart idle session at new position
+      if (notificationFiredRef.current) {
+        resetIdleSession(liveGpsPoint.latitude, liveGpsPoint.longitude);
+      }
+    }
+  }, [liveGpsPoint]);
+
   // Auto-hide overlay after 60 s only if GPS never arrives (cold-start edge case)
   useEffect(() => {
     acquireTimeoutRef.current = setTimeout(() => {
@@ -361,12 +389,14 @@ export default function MapScreen({ navigation }) {
     return () => clearTimeout(acquireTimeoutRef.current);
   }, []);
 
-  // Transition to 'acquired' on first GPS point, recenter map, then fade out overlay
+  // Transition to 'acquired' on first GPS fix — uses liveGpsPoint (immediate from
+  // getCurrentLocation) so the overlay dismisses as soon as the device has a fix,
+  // even if path is still empty (e.g. first open of the day with no stored trail).
   useEffect(() => {
-    if (path.length > 0 && !hasAcquiredRef.current) {
+    const coord = liveGpsPoint ?? (path.length > 0 ? path[path.length - 1] : null);
+    if (coord && !hasAcquiredRef.current) {
       hasAcquiredRef.current = true;
       clearTimeout(acquireTimeoutRef.current);
-      const coord = path[path.length - 1];
       if (!overlayDismissedRef.current) {
         // Overlay is still showing — transition acquiring → acquired → gone
         setLocationStatus('acquired');
@@ -385,7 +415,7 @@ export default function MapScreen({ navigation }) {
         );
       }
     }
-  }, [path]);
+  }, [liveGpsPoint, path]);
 
   useEffect(() => {
     setupNotifications();
@@ -395,6 +425,7 @@ export default function MapScreen({ navigation }) {
     loadPendingCount();
     loadWeekLogins();
     loadLoginDeadline();
+    loadTrackingIntervals();
     loadMutedLocations();
     // Record current login session locally for sync and login history calendar
     if (loginTime) insertLoginSession(loginTime, loginTime.slice(0, 10)).catch(() => {});
@@ -422,6 +453,7 @@ export default function MapScreen({ navigation }) {
     useCallback(() => {
       loadBaseLocation();
       loadSavedLocations();
+      syncAllGeofencesToTracking();
     }, [])
   );
 
@@ -481,23 +513,38 @@ export default function MapScreen({ navigation }) {
     } catch {}
   }
 
-  // Debounced address search during mark mode step 1
-  useEffect(() => {
-    clearTimeout(markSearchTimer.current);
-    if (!markMode || markQuery.length < 3) { setMarkResults([]); setMarkShowResults(false); return; }
-    markSearchTimer.current = setTimeout(async () => {
-      setMarkSearching(true);
-      try {
-        const r = await geocodeQuery(markQuery, markCenter);
-        setMarkResults(r);
-        setMarkShowResults(r.length > 0);
-      } catch {}
-      finally { setMarkSearching(false); }
-    }, 600);
-    return () => clearTimeout(markSearchTimer.current);
-  }, [markQuery, markMode]);
+  // Fetches admin-set tracking intervals → writes to AsyncStorage for the background task
+  // GET /api/settings/tracking-intervals → { interval_active, interval_idle } (seconds)
+  async function loadTrackingIntervals() {
+    try {
+      const { interval_active, interval_idle } = await api.getTrackingIntervals();
+      await syncTrackingIntervals(interval_active ?? 3, interval_idle ?? 30);
+    } catch {}
+  }
 
-  // Animations are driven directly inside handleMarkLocation / closeMarkMode — no useEffect needed
+  // Reads all location data from AsyncStorage and writes combined geofences to the tracking task.
+  // Called after any saved/base/home location set is updated so the background task always has
+  // the current geofence boundaries without waiting for a state merge.
+  async function syncAllGeofencesToTracking() {
+    try {
+      const [savedRaw, baseRaw, homeRaw, baseLegacy, homeLegacy] = await Promise.all([
+        AsyncStorage.getItem('saved_locations_data'),
+        AsyncStorage.getItem('base_locations_data'),
+        AsyncStorage.getItem('home_locations_data'),
+        AsyncStorage.getItem('base_location_data'),
+        AsyncStorage.getItem('home_location_data'),
+      ]);
+      const saved = savedRaw ? JSON.parse(savedRaw) : [];
+      const bases = baseRaw ? JSON.parse(baseRaw) : baseLegacy ? [JSON.parse(baseLegacy)] : [];
+      const homes = homeRaw ? JSON.parse(homeRaw) : homeLegacy ? [JSON.parse(homeLegacy)] : [];
+      const geofences = [
+        ...bases.map(l => ({ latitude: l.latitude, longitude: l.longitude, radius: l.radius ?? 100 })),
+        ...homes.map(l => ({ latitude: l.latitude, longitude: l.longitude, radius: l.radius ?? 100 })),
+        ...saved.map(l => ({ latitude: l.latitude, longitude: l.longitude, radius: l.radius ?? 100 })),
+      ].filter(g => g.latitude && g.longitude);
+      await syncGeofences(geofences);
+    } catch {}
+  }
 
   // Builds date→sessions map for current Sun→Sat week → login widget status boxes
   async function loadWeekLogins() {
@@ -571,7 +618,13 @@ export default function MapScreen({ navigation }) {
   }
 
   // ── Idle detection ────────────────────────────────────────────────────────
+  // If the user was at an active stop, write the true dwell (arrival → now) before resetting.
   function resetIdleSession(lat, lng) {
+    if (notificationFiredRef.current && activeStopIdRef.current !== null && idleStartTimeRef.current) {
+      const actualDwell = Math.round((Date.now() - idleStartTimeRef.current) / 60000);
+      updateStopDwell(activeStopIdRef.current, actualDwell).catch(() => {});
+    }
+    activeStopIdRef.current      = null;
     clearIdleTimers();
     idleAnchorRef.current        = { latitude: lat, longitude: lng };
     idleStartTimeRef.current     = Date.now();
@@ -618,6 +671,7 @@ export default function MapScreen({ navigation }) {
           date:                todayDate,
         });
       }
+      activeStopIdRef.current = stopId;  // movement detection will finalize dwell on departure
       await loadPendingCount();
     } catch {}
 
@@ -630,11 +684,9 @@ export default function MapScreen({ navigation }) {
       trigger: null,
     });
 
-    // Grace period: update the dwell time to reflect how long they actually stayed
-    graceTimerRef.current = setTimeout(async () => {
-      if (stopId !== null) {
-        try { await updateStopDwell(stopId, dwellMins + Math.round(GRACE_PERIOD_MS / 60000)); } catch {}
-      }
+    // Grace period: add a cooldown zone so the same spot doesn't re-trigger immediately.
+    // Dwell duration is NOT updated here — resetIdleSession() writes the true elapsed time on departure.
+    graceTimerRef.current = setTimeout(() => {
       addCooldownZone(latitude, longitude, 2 * 60 * 60 * 1000);
     }, GRACE_PERIOD_MS);
   }
@@ -642,9 +694,9 @@ export default function MapScreen({ navigation }) {
   // Returns true if lat/lng falls within any saved pin, base location, or home location.
   // Used by onIdleThresholdReached to suppress stop popups at known locations.
   function isNearSavedLocation(lat, lng) {
-    if (savedLocations.some((l) => getDistance(lat, lng, l.latitude, l.longitude) < SAVED_LOCATION_RADIUS)) return true;
-    if (baseLocation && getDistance(lat, lng, baseLocation.latitude, baseLocation.longitude) <= (baseLocation.radius ?? SAVED_LOCATION_RADIUS)) return true;
-    if (homeLocation && getDistance(lat, lng, homeLocation.latitude, homeLocation.longitude) <= (homeLocation.radius ?? SAVED_LOCATION_RADIUS)) return true;
+    if (savedLocations.some(l => getDistance(lat, lng, l.latitude, l.longitude) < SAVED_LOCATION_RADIUS)) return true;
+    if (baseLocations.some(b => getDistance(lat, lng, b.latitude, b.longitude) <= (b.radius ?? SAVED_LOCATION_RADIUS))) return true;
+    if (homeLocations.some(h => getDistance(lat, lng, h.latitude, h.longitude) <= (h.radius ?? SAVED_LOCATION_RADIUS))) return true;
     return false;
   }
   function isInCooldownZone(lat, lng) {
@@ -668,12 +720,6 @@ export default function MapScreen({ navigation }) {
   }
 
 
-  function getDistance(lat1, lon1, lat2, lon2) {
-    const R = 6371e3, r1 = (lat1 * Math.PI) / 180, r2 = (lat2 * Math.PI) / 180;
-    const dLat = ((lat2 - lat1) * Math.PI) / 180, dLon = ((lon2 - lon1) * Math.PI) / 180;
-    const a = Math.sin(dLat / 2) ** 2 + Math.cos(r1) * Math.cos(r2) * Math.sin(dLon / 2) ** 2;
-    return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
-  }
 
   // Shows the login-status popup; auto-dismisses after 3 s
   function dismissLoginStatus() {
@@ -691,9 +737,15 @@ export default function MapScreen({ navigation }) {
   }
 
   // ── Map actions ───────────────────────────────────────────────────────────
+  // Always fires a raw GPS ping (getFreshLocation) — skips cache so the map
+  // centres on the true current position, not a stale cached fix.
   async function recenterMap() {
-    const target = liveLocRef.current ?? await getCurrentLocation().then(l => l?.coords ?? null).catch(() => null);
+    const loc = await getFreshLocation().catch(() => null);
+    const target = loc?.coords ?? null;
     if (!target || !mapRef.current) return;
+    const point = { latitude: target.latitude, longitude: target.longitude };
+    setLiveGpsPoint(point);
+    liveLocRef.current = point;
     mapRef.current.animateCamera(
       { center: target, pitch: 0, heading: 0, zoom: 14, altitude: 3200 },
       { duration: 600 },
@@ -701,12 +753,13 @@ export default function MapScreen({ navigation }) {
   }
 
   // Re-fetches GPS from device → shows acquiring/acquired overlays → updates liveGpsPoint + liveLocRef + re-centres map
+  // Uses getFreshLocation() to bypass cache and get a true raw ping.
   async function reacquireLocation() {
     if (reacquiring) return;
     setReacquiring(true);
     setLocationStatus('acquiring');
     try {
-      const loc = await getCurrentLocation();
+      const loc = await getFreshLocation();
       if (loc) {
         const { latitude, longitude } = loc.coords;
         const point = { latitude, longitude };
@@ -727,113 +780,83 @@ export default function MapScreen({ navigation }) {
     setReacquiring(false);
   }
 
-  // Saved pins still come from the server → idle suppression list + map markers
+  // Reads saved pins from AsyncStorage — instant, no network needed.
+  // Also re-syncs geofences so the background task immediately sees new/removed pins.
   async function loadSavedLocations() {
-    try { const d = await api.getSavedLocations(); setSavedLocations(d); } catch {}
+    try {
+      const raw = await AsyncStorage.getItem('saved_locations_data');
+      setSavedLocations(raw ? JSON.parse(raw) : []);
+      syncAllGeofencesToTracking();
+    } catch {}
   }
 
-  // Reads base + home geo profiles from AsyncStorage → drawn as geofence circles on map
+  // Reads base + home geo profile arrays from AsyncStorage → drawn as geofence circles on map.
+  // Falls back to legacy single-item keys for migration.
+  // Also re-syncs geofences so the background task immediately sees updated base/home boundaries.
   async function loadBaseLocation() {
     try {
-      const [baseRaw, homeRaw] = await Promise.all([
+      const [baseRaw, homeRaw, baseLegacy, homeLegacy] = await Promise.all([
+        AsyncStorage.getItem('base_locations_data'),
+        AsyncStorage.getItem('home_locations_data'),
         AsyncStorage.getItem('base_location_data'),
         AsyncStorage.getItem('home_location_data'),
       ]);
-      setBaseLocation(baseRaw ? JSON.parse(baseRaw) : null);
-      setHomeLocation(homeRaw ? JSON.parse(homeRaw) : null);
+      setBaseLocations(baseRaw ? JSON.parse(baseRaw) : baseLegacy ? [JSON.parse(baseLegacy)] : []);
+      setHomeLocations(homeRaw ? JSON.parse(homeRaw) : homeLegacy ? [JSON.parse(homeLegacy)] : []);
+      syncAllGeofencesToTracking();
     } catch {}
   }
-  // Opens mark-location overlay and centres map on current GPS position
+  // Opens the drop-pin overlay; map snaps to current GPS position.
+  // Small delay before animateCamera lets the mapPadding change propagate to the
+  // native layer first, so onRegionChange fires the correct crosshair-aligned coords.
   function handleMarkLocation() {
     const snap = liveLocRef.current;
     setMarkMode(true);
-    setMarkStep(1);
-    setMarkName('');
-    setMarkCategory('client');
-    setMarkQuery('');
-    setMarkResults([]);
-    setMarkShowResults(false);
-    setMarkConfirmed(null);
-    setMarkRadius(100);
-    // Instantly snap map to live location so the crosshair is already on the green dot
-    if (snap) {
-      setMarkCenter(snap);
-      mapRef.current?.animateCamera({ center: snap, zoom: 16, pitch: 0, heading: 0 }, { duration: 0 });
-    }
-    // Animate ribbon swap + panel slide-in
-    markPanelOpacity.setValue(1);
+    if (snap) setMarkCenter(snap);
+    markCardAnim.setValue(0);
     markPinDropAnim.setValue(-80);
-    Animated.parallel([
-      Animated.timing(markRibbonAnim, { toValue: 1, duration: 260, useNativeDriver: true }),
-      Animated.spring(markPanelAnim,  { toValue: 0, bounciness: 4, speed: 14, useNativeDriver: true }),
-    ]).start();
-    // Drop pin onto the live location after map has snapped
+    Animated.spring(markCardAnim, { toValue: 1, bounciness: 6, speed: 14, useNativeDriver: true }).start();
     setTimeout(() => {
+      if (snap) {
+        mapRef.current?.animateCamera({ center: snap, zoom: 16, pitch: 0, heading: 0 }, { duration: 300 });
+      }
       Animated.spring(markPinDropAnim, { toValue: 0, bounciness: 14, speed: 10, useNativeDriver: true }).start();
     }, 80);
   }
 
   function closeMarkMode() {
-    Keyboard.dismiss();
-    // Fade + slide panel fully off screen, then reset state
-    Animated.parallel([
-      Animated.timing(markRibbonAnim,    { toValue: 0, duration: 240, useNativeDriver: true }),
-      Animated.timing(markPanelOpacity,  { toValue: 0, duration: 180, useNativeDriver: true }),
-      Animated.timing(markPanelAnim,     { toValue: SCREEN_HEIGHT, duration: 280, useNativeDriver: true }),
-    ]).start(() => {
+    Animated.timing(markCardAnim, { toValue: 0, duration: 220, useNativeDriver: true }).start(() => {
       setMarkMode(false);
-      setMarkStep(1);
-      setMarkQuery('');
-      setMarkResults([]);
-      setMarkShowResults(false);
     });
   }
 
-  // Locks the current map centre and advances to radius step
-  function handleMarkSetPin() {
-    Keyboard.dismiss();
-    setMarkConfirmed(markCenter);
-    setMarkShowResults(false);
-    mapRef.current?.animateToRegion(
-      { ...markCenter, latitudeDelta: 0.003, longitudeDelta: 0.003 }, 400,
-    );
-    setTimeout(() => setMarkStep(2), 420);
+  // Navigates to RegisterLocationScreen with the confirmed pin coordinates
+  function handleConfirmPin() {
+    if (!markCenter) return;
+    setMarkMode(false);
+    markCardAnim.setValue(0);
+    navigation.navigate('RegisterLocation', {
+      latitude:  markCenter.latitude,
+      longitude: markCenter.longitude,
+    });
   }
 
-  function handleMarkBack() {
-    if (markStep === 2) { setMarkStep(1); return; }
-    closeMarkMode();
-  }
-
-  function selectMarkResult(item) {
-    setMarkQuery(item.title);
-    setMarkResults([]);
-    setMarkShowResults(false);
-    Keyboard.dismiss();
-    const coord = { latitude: item.latitude, longitude: item.longitude };
-    setMarkCenter(coord);
-    mapRef.current?.animateToRegion({ ...coord, latitudeDelta: 0.003, longitudeDelta: 0.003 }, 500);
-  }
-
-  async function submitMarkLocation() {
-    if (!markName.trim()) { Alert.alert('Required', 'Please enter a location name'); return; }
-    setMarkSaving(true);
-    try {
-      await api.saveLocation({
-        name:      markName.trim(),
-        category:  markCategory,
-        latitude:  markConfirmed.latitude,
-        longitude: markConfirmed.longitude,
-        radius:    markRadius,
-      });
-      closeMarkMode();
-      await loadSavedLocations();
-    } catch (err) {
-      Alert.alert('Error', err.message);
-    }
-    setMarkSaving(false);
-  }
+  // For employees: prompts to sync before logging out.
+  // Auto-logout timer calls logout() in AuthContext directly — this prompt is manual-only.
   async function handleLogout() {
+    if (user?.role === 'employee') {
+      Alert.alert(
+        'Sync before logging out?',
+        "Would you like to sync today's work to the cloud before you go?",
+        [
+          { text: 'Sync Now',      onPress: () => navigation.navigate('Sync', { date: todayDate }) },
+          { text: 'Logout Anyway', style: 'destructive',
+            onPress: async () => { clearIdleTimers(); await stopTracking(); await drainCacheToSQLite(); await logout(); } },
+          { text: 'Cancel', style: 'cancel' },
+        ]
+      );
+      return;
+    }
     clearIdleTimers(); await stopTracking(); await drainCacheToSQLite(); await logout();
   }
 
@@ -884,57 +907,59 @@ export default function MapScreen({ navigation }) {
         mapType={mapType}
         pitchEnabled={!markMode}
         rotateEnabled={!markMode}
+        scrollEnabled
+        zoomEnabled
         showsUserLocation={false}
         showsMyLocationButton={false}
-        mapPadding={{ top: 195, right: 0, bottom: 0, left: 0 }}
+        mapPadding={markMode
+          ? { top: 0, bottom: 220, left: 0, right: 0 }
+          : { top: 185, right: 0, bottom: 160, left: 0 }
+        }
+        onRegionChange={r => {
+          if (markMode) setMarkCenter({ latitude: r.latitude, longitude: r.longitude });
+        }}
         onRegionChangeComplete={r => {
-          if (markMode && markStep === 1)
-            setMarkCenter({ latitude: r.latitude, longitude: r.longitude });
+          if (markMode) setMarkCenter({ latitude: r.latitude, longitude: r.longitude });
         }}
       >
         {/* Geo profiles — rendered first so live location marker always appears on top */}
-        {baseLocation && (
-          <>
-            <Circle
-              center={{ latitude: baseLocation.latitude, longitude: baseLocation.longitude }}
-              radius={baseLocation.radius ?? 100}
-              strokeColor={annStroke}
-              fillColor={annFill}
-              strokeWidth={1.5}
-            />
-            <Marker
-              coordinate={{ latitude: baseLocation.latitude, longitude: baseLocation.longitude }}
-              anchor={{ x: 0.5, y: 1 }}
-              tracksViewChanges={false}
-            >
-              <View style={[styles.baseLocationPin, { backgroundColor: pinBg, borderColor: isSat ? BLACK : WHITE }]}>
-                <MaterialIcons name="star" size={14} color={pinIcon} />
-              </View>
-            </Marker>
-          </>
-        )}
-        {homeLocation && (
-          <>
-            <Circle
-              center={{ latitude: homeLocation.latitude, longitude: homeLocation.longitude }}
-              radius={homeLocation.radius ?? 100}
-              strokeColor={annStroke}
-              fillColor={annFill}
-              strokeWidth={1.5}
-            />
-            <Marker
-              coordinate={{ latitude: homeLocation.latitude, longitude: homeLocation.longitude }}
-              anchor={{ x: 0.5, y: 1 }}
-              tracksViewChanges={false}
-            >
-              <View style={[styles.baseLocationPin, { backgroundColor: pinBg, borderColor: isSat ? BLACK : WHITE }]}>
-                <MaterialIcons name="home" size={14} color={pinIcon} />
-              </View>
-            </Marker>
-          </>
-        )}
+        {baseLocations.flatMap((loc, i) => [
+          <Circle key={`base-circle-${i}`}
+            center={{ latitude: loc.latitude, longitude: loc.longitude }}
+            radius={loc.radius ?? 100}
+            strokeColor={annStroke} fillColor={annFill} strokeWidth={1.5}
+          />,
+          <Marker key={`base-marker-${i}`}
+            coordinate={{ latitude: loc.latitude, longitude: loc.longitude }}
+            anchor={{ x: 0.5, y: 1 }} tracksViewChanges={false}
+          >
+            <View style={[styles.baseLocationPin, { backgroundColor: pinBg, borderColor: isSat ? BLACK : WHITE }]}>
+              <MaterialIcons name="star" size={14} color={pinIcon} />
+            </View>
+          </Marker>,
+        ])}
+        {homeLocations.flatMap((loc, i) => [
+          <Circle key={`home-circle-${i}`}
+            center={{ latitude: loc.latitude, longitude: loc.longitude }}
+            radius={loc.radius ?? 100}
+            strokeColor={annStroke} fillColor={annFill} strokeWidth={1.5}
+          />,
+          <Marker key={`home-marker-${i}`}
+            coordinate={{ latitude: loc.latitude, longitude: loc.longitude }}
+            anchor={{ x: 0.5, y: 1 }} tracksViewChanges={false}
+          >
+            <View style={[styles.baseLocationPin, { backgroundColor: pinBg, borderColor: isSat ? BLACK : WHITE }]}>
+              <MaterialIcons name="home" size={14} color={pinIcon} />
+            </View>
+          </Marker>,
+        ])}
 
-        {savedLocations.map((loc) => (
+        {savedLocations.flatMap((loc) => [
+          <Circle key={`saved-circle-${loc.id}`}
+            center={{ latitude: loc.latitude, longitude: loc.longitude }}
+            radius={loc.radius ?? 100}
+            strokeColor={annStroke} fillColor={annFill} strokeWidth={1.5}
+          />,
           <Marker
             key={`saved-${loc.id}`}
             coordinate={{ latitude: loc.latitude, longitude: loc.longitude }}
@@ -944,61 +969,49 @@ export default function MapScreen({ navigation }) {
             <View style={[styles.savedPin, { borderColor: savedBorder }]}>
               <MaterialIcons name={CATEGORY_ICON[loc.category] || 'place'} size={14} color={BLACK} />
             </View>
-          </Marker>
-        ))}
+          </Marker>,
+        ])}
 
         {/* Live location rendered last so it always appears on top */}
         {liveCoord && <LiveLocationMarker coordinate={liveCoord} />}
 
-        {/* Mark-location geofence preview — step 2 only */}
-        {markMode && markStep === 2 && markConfirmed && (
-          <Circle
-            center={markConfirmed}
-            radius={markRadius}
-            strokeColor="rgba(0,0,0,0.55)"
-            fillColor="rgba(0,0,0,0.07)"
-            strokeWidth={1.5}
-          />
-        )}
       </MapView>
 
-      {/* ── Nav pill — shared NavPill component, adapts to satellite mode ── */}
-      <NavPill
-        activeTab="home"
-        navigation={navigation}
-        pendingCount={pendingCount}
-        animValue={navAnim}
-        pillBg={uiBg}
-        activeBg={navCapsuleBg}
-        activeColor={navCapsuleText}
-        inactiveColor={navInactiveIcon}
-      />
+      {/* ── Merged top card — Nav tabs + Login widget — hidden in mark mode ── */}
+      {!markMode && (
+        <Animated.View style={[styles.topCard, { backgroundColor: uiBg, opacity: navAnim }]}>
 
-      {/* ── Login time widget — cross-fades with search bar when mark mode opens ── */}
-      <Animated.View style={[styles.loginWidget, {
-        backgroundColor: uiBg, borderColor: uiBorder,
-        opacity: Animated.multiply(navAnim, markRibbonAnim.interpolate({ inputRange: [0, 1], outputRange: [1, 0] })),
-        transform: [{ translateY: markRibbonAnim.interpolate({ inputRange: [0, 1], outputRange: [0, -10] }) }],
-      }]}
-        pointerEvents={markMode ? 'none' : 'auto'}
-      >
+          {/* Row 1: 4 navigation tabs */}
+          <NavPill
+            embedded
+            activeTab="home"
+            navigation={navigation}
+            pendingCount={pendingCount}
+            activeBg={navCapsuleBg}
+            activeColor={navCapsuleText}
+            inactiveColor={navInactiveIcon}
+          />
 
-        {/* Left: login time — tap to show on-time status popup */}
-        <TouchableOpacity onPress={toggleLoginStatus} activeOpacity={0.75}>
-          <Text style={[styles.loginWidgetLabel, { color: uiTextDim }]}>LOGIN TIME</Text>
-          <Text style={[styles.loginWidgetTime, { color: uiText }]}>{formattedLoginTime}</Text>
-        </TouchableOpacity>
+          <View style={[styles.topCardDivider, { backgroundColor: uiDivider }]} />
 
-        <View style={[styles.loginWidgetDivider, { backgroundColor: uiDivider }]} />
+          {/* Row 2: Login time + week status */}
+          <View style={styles.loginWidgetRow}>
 
-        {/* Right: date+week label · 7 status boxes — tap opens day log */}
-        <TouchableOpacity style={styles.weekCluster} onPress={() => navigation.navigate('DayLog')} activeOpacity={0.75}>
-          <View style={styles.weekBoxRow}>
-            <View style={styles.weekDateStack}>
-              <Text style={[styles.weekDateText, { color: uiText }]}>{dateLabel}</Text>
-              <Text style={[styles.weekNumText, { color: uiTextSub }]}>{`W${currentWeek}`}</Text>
-            </View>
-            <View style={styles.weekBoxes}>
+            {/* Left: login time — tap to show on-time status popup */}
+            <TouchableOpacity onPress={toggleLoginStatus} activeOpacity={0.75}>
+              <Text style={[styles.loginWidgetLabel, { color: uiTextDim }]}>LOGIN TIME</Text>
+              <Text style={[styles.loginWidgetTime, { color: uiText }]}>{formattedLoginTime}</Text>
+            </TouchableOpacity>
+
+            <View style={[styles.loginWidgetDivider, { backgroundColor: uiDivider }]} />
+
+            {/* Right: date+week label · 7 status boxes — tap opens day log */}
+            <TouchableOpacity style={styles.weekCluster} onPress={() => navigation.navigate('DayLog')} activeOpacity={0.75}>
+          <View style={styles.weekDateStack}>
+            <Text style={[styles.weekDateText, { color: uiText }]}>{dateLabel}</Text>
+            <Text style={[styles.weekNumText, { color: uiTextSub }]}>{`W${currentWeek}`}</Text>
+          </View>
+          <View style={styles.weekBoxes}>
               {weekSegments.flatMap((seg) => {
                 if (!seg.isCurrent) {
                   const n = seg.indices.length;
@@ -1044,7 +1057,7 @@ export default function MapScreen({ navigation }) {
                         styles.weekBox,
                         { backgroundColor: bgColor },
                         hasBorder && { borderWidth: 1, borderColor },
-                        isToday && { borderWidth: 2, borderColor: uiText, transform: [{ scale: 1.12 }] },
+                        isToday && { borderWidth: 2, borderColor: uiText },
                       ]}
                     >
                       <Text style={[styles.weekBoxLabel, { color: textColor }]}>{WEEK_LABELS[i]}</Text>
@@ -1053,19 +1066,20 @@ export default function MapScreen({ navigation }) {
                 });
               })}
             </View>
-          </View>
-        </TouchableOpacity>
+          </TouchableOpacity>
 
-        {/* Arrow button — opens day log */}
-        <TouchableOpacity
-          style={styles.loginWidgetArrow}
-          onPress={() => navigation.navigate('DayLog')}
-          activeOpacity={0.75}
-        >
-          <MaterialIcons name="chevron-right" size={20} color="#000000" />
-        </TouchableOpacity>
+          {/* Arrow button — opens day log */}
+          <TouchableOpacity
+            style={[styles.loginWidgetArrow, { backgroundColor: uiCard }]}
+            onPress={() => navigation.navigate('DayLog')}
+            activeOpacity={0.75}
+          >
+            <MaterialIcons name="chevron-right" size={20} color={uiText} />
+          </TouchableOpacity>
 
-      </Animated.View>
+          </View>{/* end loginWidgetRow */}
+        </Animated.View>
+      )}{/* end topCard */}
 
       {/* ── Login status popup — appears below left portion of ribbon on tap ── */}
       {showLoginStatus && loginStatusLabel && (
@@ -1079,279 +1093,152 @@ export default function MapScreen({ navigation }) {
         </Animated.View>
       )}
 
-      {/* ── You're at / Moving card — centred above bottom ribbon ── */}
-      {liveCoord && !markMode && (
-        <Animated.View style={[styles.atCard, { opacity: navAnim }]}>
-          {currentPlace ? (
-            <View style={styles.atCardRow}>
-              <View style={styles.atCardIconWrap}>
-                <MaterialIcons name={currentPlace.icon} size={18} color={WHITE} />
-              </View>
-              <View style={styles.atCardBody}>
-                <Text style={styles.atCardEyebrow}>YOU'RE AT</Text>
-                <Text style={styles.atCardName} numberOfLines={1}>{currentPlace.name}</Text>
-                <View style={styles.atCardMeta}>
-                  <Text style={styles.atCardCategory}>{currentPlace.label.toUpperCase()}</Text>
-                  <Animated.View style={[styles.atCardLiveDot, { opacity: liveDotBlink }]} />
-                </View>
-              </View>
-            </View>
-          ) : (
-            <View style={styles.atCardRow}>
-              <Animated.View style={[styles.atCardIconWrap, { opacity: movingFade }]}>
-                <MaterialIcons name="navigation" size={18} color={WHITE} />
-              </Animated.View>
-              <View style={styles.atCardBody}>
-                <Text style={styles.atCardEyebrow}>STATUS</Text>
-                <Text style={styles.atCardName}>You're moving</Text>
-                <Text style={styles.atCardCategory}>IN TRANSIT</Text>
-              </View>
-            </View>
-          )}
-        </Animated.View>
-      )}
-
-      {/* ── Map controls — recenter + satellite, right side ── */}
-      <Animated.View style={[styles.mapControls, { opacity: navAnim }]}>
-        <ScalePress
-          style={styles.mapControlBtn}
-          onPress={recenterMap}
-        >
-          <MaterialIcons name="my-location" size={22} color={BLACK} />
-        </ScalePress>
-        <ScalePress
-          style={[styles.mapControlBtn, mapType === 'satellite' && styles.mapControlBtnActive]}
-          onPress={() => setMapType(mapType === 'standard' ? 'satellite' : 'standard')}
-        >
-          <MaterialIcons
-            name={mapType === 'satellite' ? 'map' : 'layers'}
-            size={22}
-            color={mapType === 'satellite' ? WHITE : BLACK}
-          />
-        </ScalePress>
-        <ScalePress style={styles.mapControlBtn} onPress={reacquireLocation}>
-          {reacquiring
-            ? <ActivityIndicator size="small" color={BLACK} />
-            : <MaterialIcons name="refresh" size={22} color={BLACK} />
-          }
-        </ScalePress>
-      </Animated.View>
-
-      {/* ── Bottom action row — Today's Schedule + Mark This Location ── */}
+      {/* ── Merged bottom card — Explore / You're at / Actions ── */}
       {!markMode && (
-        <Animated.View style={[styles.actionRow, { opacity: navAnim }]}>
-          <TouchableOpacity
-            style={styles.actionBtn}
-            onPress={() => navigation.navigate('Schedule')}
-            activeOpacity={0.75}
-          >
-            <MaterialIcons name="calendar-today" size={19} color={BLACK} />
-            <Text style={styles.actionBtnText}>Today's Schedule</Text>
+        <Animated.View style={[styles.bottomCard, { opacity: navAnim }]} pointerEvents="box-none">
+
+          {/* Row 1: Explore locations */}
+          <TouchableOpacity style={styles.exploreRow} onPress={() => navigation.navigate('ExploreLocations')} activeOpacity={0.75}>
+            <View style={styles.exploreRowLeft}>
+              <MaterialIcons name="explore" size={17} color={WHITE} />
+              <Text style={styles.exploreRowText}>Explore locations</Text>
+            </View>
+            <MaterialIcons name="arrow-forward" size={13} color={WHITE} />
           </TouchableOpacity>
-          <View style={styles.actionDivider} />
-          <TouchableOpacity
-            style={styles.actionBtn}
-            onPress={handleMarkLocation}
-            activeOpacity={0.75}
+
+          {/* Row 2: You're at / status — only when GPS is live */}
+          {liveCoord && (
+            <>
+              <View style={styles.cardDivider} />
+              {currentPlace ? (
+                <View style={styles.atRow}>
+                  <View style={styles.atIconWrap}>
+                    <MaterialIcons name={currentPlace.icon} size={18} color={WHITE} />
+                  </View>
+                  <View style={styles.atBody}>
+                    <Text style={styles.atEyebrow}>YOU'RE AT</Text>
+                    <Text style={styles.atName} numberOfLines={1}>{currentPlace.name}</Text>
+                    <View style={styles.atMeta}>
+                      <Text style={styles.atCategory}>{currentPlace.label.toUpperCase()}</Text>
+                      <Animated.View style={[styles.atLiveDot, { opacity: liveDotBlink }]} />
+                    </View>
+                  </View>
+                </View>
+              ) : (
+                <View style={styles.atRow}>
+                  {isMoving ? (
+                    <Animated.View style={[styles.atIconWrap, { opacity: movingFade }]}>
+                      <MaterialIcons name="navigation" size={18} color={WHITE} />
+                    </Animated.View>
+                  ) : (
+                    <View style={styles.atIconWrap}>
+                      <MaterialIcons name="location-on" size={18} color={WHITE} />
+                    </View>
+                  )}
+                  <View style={styles.atBody}>
+                    <Text style={styles.atEyebrow}>STATUS</Text>
+                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
+                      <Text style={styles.atName}>You're</Text>
+                      <GlowSweepText label={isMoving ? 'moving' : 'away'} />
+                    </View>
+                    <Text style={styles.atCategory}>{isMoving ? 'IN TRANSIT' : 'AWAY'}</Text>
+                  </View>
+                </View>
+              )}
+            </>
+          )}
+
+          {/* Row 3: Action buttons */}
+          <View style={styles.cardDivider} />
+          <View style={styles.actionsRow}>
+            <TouchableOpacity style={styles.actionBtn} onPress={() => navigation.navigate('Schedule')} activeOpacity={0.75}>
+              <MaterialIcons name="calendar-today" size={19} color={WHITE} />
+              <Text style={styles.actionBtnText}>Today's Schedule</Text>
+            </TouchableOpacity>
+            <View style={styles.actionDivider} />
+            <TouchableOpacity style={styles.actionBtn} onPress={handleMarkLocation} activeOpacity={0.75}>
+              <MaterialIcons name="add-location-alt" size={19} color={WHITE} />
+              <Text style={styles.actionBtnText}>Mark This Location</Text>
+            </TouchableOpacity>
+          </View>
+
+        </Animated.View>
+      )}
+
+      {/* ── Map controls — hidden while mark mode is active ── */}
+      {!markMode && (
+        <Animated.View style={[styles.mapControls, { opacity: navAnim }]}>
+          <ScalePress style={styles.mapControlBtn} onPress={recenterMap}>
+            <MaterialIcons name="my-location" size={22} color={BLACK} />
+          </ScalePress>
+          <ScalePress
+            style={[styles.mapControlBtn, mapType === 'satellite' && styles.mapControlBtnActive]}
+            onPress={() => setMapType(mapType === 'standard' ? 'satellite' : 'standard')}
           >
-            <MaterialIcons name="add-location-alt" size={19} color={BLACK} />
-            <Text style={styles.actionBtnText}>Mark This Location</Text>
-          </TouchableOpacity>
+            <MaterialIcons name={mapType === 'satellite' ? 'map' : 'layers'} size={22} color={mapType === 'satellite' ? WHITE : BLACK} />
+          </ScalePress>
+          <ScalePress style={styles.mapControlBtn} onPress={reacquireLocation}>
+            {reacquiring
+              ? <ActivityIndicator size="small" color={BLACK} />
+              : <MaterialIcons name="refresh" size={22} color={BLACK} />
+            }
+          </ScalePress>
         </Animated.View>
       )}
 
 
-      {/* ── Mark Location — 2-step overlay rendered directly on the home screen ── */}
+      {/* ── Mark mode — Step 1: Drop Pin ── */}
 
-      {/* Step indicator badge — shown in step 2 (step 1 has the search bar at same position) */}
-      {markMode && markStep === 2 && (
-        <View style={styles.markStepBadge}>
-          <MaterialIcons name="radio-button-checked" size={13} color={WHITE} />
-          <Text style={styles.markStepText}>PIN PLACED  ·  SET GEOFENCE RADIUS</Text>
-        </View>
-      )}
-
-      {/* ── Mark search bar — animates in over the login widget (same position/shape) ── */}
-      <Animated.View
-        style={[styles.loginWidget, styles.markSearchBar, {
-          opacity: markRibbonAnim,
-          transform: [{ translateY: markRibbonAnim.interpolate({ inputRange: [0, 1], outputRange: [10, 0] }) }],
-        }]}
-        pointerEvents={markMode && markStep === 1 ? 'auto' : 'none'}
-      >
-        <MaterialIcons name="search" size={18} color={GRAY} />
-        <TextInput
-          style={[styles.markSearchInput, { color: BLACK }]}
-          value={markQuery}
-          onChangeText={setMarkQuery}
-          placeholder="Search address…"
-          placeholderTextColor={GRAY2}
-          returnKeyType="search"
-          clearButtonMode="while-editing"
-          autoCorrect={false}
-        />
-        {markSearching
-          ? <ActivityIndicator size="small" color={GRAY} />
-          : <TouchableOpacity onPress={closeMarkMode} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
-              <MaterialIcons name="close" size={16} color={GRAY} />
-            </TouchableOpacity>
-        }
-      </Animated.View>
-
-      {/* Search results dropdown — floats below the ribbon */}
-      {markMode && markStep === 1 && markShowResults && (
-        <FlatList
-          style={styles.markResultsList}
-          data={markResults}
-          keyExtractor={r => String(r.id)}
-          keyboardShouldPersistTaps="handled"
-          renderItem={({ item }) => (
-            <TouchableOpacity
-              style={styles.markResultRow}
-              onPress={() => selectMarkResult(item)}
-              activeOpacity={0.7}
-            >
-              <MaterialIcons name="location-on" size={15} color={GRAY} style={{ marginTop: 1 }} />
-              <View style={{ flex: 1 }}>
-                <Text style={styles.markResultTitle} numberOfLines={1}>{item.title}</Text>
-                <Text style={styles.markResultSub}   numberOfLines={1}>{item.subtitle}</Text>
-              </View>
-            </TouchableOpacity>
-          )}
-          ItemSeparatorComponent={() => <View style={{ height: 1, backgroundColor: GRAY3, marginLeft: 36 }} />}
-        />
-      )}
-
-      {/* Crosshair pin — step 1 only */}
-      {markMode && markStep === 1 && (
-        <View pointerEvents="none" style={styles.markCrosshairWrap}>
-          <Animated.View style={{ transform: [{ translateY: markPinDropAnim }], alignItems: 'center' }}>
-            <View style={styles.markCrosshairPin}>
-              <MaterialIcons name="add-location-alt" size={18} color={WHITE} />
-            </View>
-            <View style={styles.markCrosshairStem} />
-          </Animated.View>
-          <View style={styles.markCrosshairDot} />
-        </View>
-      )}
-
-      {/* Confirmed pin dot — step 2 */}
-      {markMode && markStep === 2 && (
-        <View pointerEvents="none" style={styles.markCrosshairWrap}>
-          <View style={[styles.markCrosshairPin, { backgroundColor: GRAY }]}>
-            <MaterialIcons name="location-pin" size={18} color={WHITE} />
-          </View>
-          <View style={styles.markCrosshairStem} />
-          <View style={styles.markCrosshairDot}  />
-        </View>
-      )}
-
-      {/* Animated bottom panel */}
+      {/* Crosshair pin — centred in the map area above the bottom card, springs down on open */}
       {markMode && (
-        <KeyboardAvoidingView
-          behavior={Platform.OS === 'ios' ? 'position' : undefined}
-          style={styles.markPanelKAV}
-          keyboardVerticalOffset={0}
-        >
-          <Animated.View style={[styles.markPanel, { opacity: markPanelOpacity, transform: [{ translateY: markPanelAnim }] }]}>
-
-            {/* Panel header row */}
-            <View style={styles.markPanelHeader}>
-              <TouchableOpacity style={styles.markBackBtn} onPress={handleMarkBack} activeOpacity={0.7}>
-                <MaterialIcons name={markStep === 1 ? 'close' : 'arrow-back-ios'} size={18} color={WHITE} />
-              </TouchableOpacity>
-              <Text style={styles.markPanelTitle}>
-                {markStep === 1 ? 'Place Pin' : 'Geofence Radius'}
-              </Text>
-              <View style={{ width: 36 }} />
-            </View>
-
-            {markStep === 1 ? (
-              <>
-                {/* Name input */}
-                <TextInput
-                  style={styles.markNameInput}
-                  placeholder="Location label"
-                  placeholderTextColor={GRAY2}
-                  value={markName}
-                  onChangeText={setMarkName}
-                  returnKeyType="done"
-                  onSubmitEditing={Keyboard.dismiss}
-                />
-
-                {/* Category grid */}
-                <Text style={styles.markSectionLabel}>CATEGORY</Text>
-                <View style={styles.markCatGrid}>
-                  {CATEGORIES.map((cat) => {
-                    const active = markCategory === cat.key;
-                    return (
-                      <TouchableOpacity
-                        key={cat.key}
-                        style={[styles.markCatChip, active && styles.markCatChipActive]}
-                        onPress={() => setMarkCategory(cat.key)}
-                        activeOpacity={0.75}
-                      >
-                        <MaterialIcons name={cat.icon} size={16} color={active ? BLACK : 'rgba(255,255,255,0.65)'} />
-                        <Text style={[styles.markCatLabel, active && styles.markCatLabelActive]}>
-                          {cat.label}
-                        </Text>
-                      </TouchableOpacity>
-                    );
-                  })}
-                </View>
-
-                <TouchableOpacity style={styles.markPrimaryBtn} onPress={handleMarkSetPin} activeOpacity={0.85}>
-                  <MaterialIcons name="push-pin" size={17} color={BLACK} />
-                  <Text style={styles.markPrimaryBtnText}>Set Pin Here</Text>
-                </TouchableOpacity>
-              </>
-            ) : (
-              <>
-                {/* Coordinates readout */}
-                {markConfirmed && (
-                  <View style={styles.markCoordRow}>
-                    <MaterialIcons name="location-on" size={14} color="rgba(255,255,255,0.45)" />
-                    <Text style={styles.markCoordText}>
-                      {markConfirmed.latitude.toFixed(6)},  {markConfirmed.longitude.toFixed(6)}
-                    </Text>
-                  </View>
-                )}
-
-                <Text style={styles.markSectionLabel}>GEOFENCE RADIUS</Text>
-                <View style={styles.markRadiusRow}>
-                  {MARK_RADIUS_PRESETS.map(r => (
-                    <TouchableOpacity
-                      key={r}
-                      style={[styles.markRadiusChip, markRadius === r && styles.markRadiusChipActive]}
-                      onPress={() => setMarkRadius(r)}
-                      activeOpacity={0.75}
-                    >
-                      <Text style={[styles.markRadiusText, markRadius === r && styles.markRadiusTextActive]}>
-                        {r}m
-                      </Text>
-                    </TouchableOpacity>
-                  ))}
-                </View>
-
-                <TouchableOpacity
-                  style={[styles.markPrimaryBtn, markSaving && { opacity: 0.6 }]}
-                  onPress={submitMarkLocation}
-                  activeOpacity={0.85}
-                  disabled={markSaving}
-                >
-                  {markSaving
-                    ? <ActivityIndicator size="small" color={BLACK} />
-                    : <MaterialIcons name="check" size={17} color={BLACK} />
-                  }
-                  <Text style={styles.markPrimaryBtnText}>
-                    {markSaving ? 'Saving…' : 'Save Location'}
-                  </Text>
-                </TouchableOpacity>
-              </>
-            )}
-          </Animated.View>
-        </KeyboardAvoidingView>
+        <View pointerEvents="none" style={styles.markCrosshairWrap}>
+          <View style={{ alignItems: 'center', transform: [{ translateY: -32 }] }}>
+            <Animated.View style={{ transform: [{ translateY: markPinDropAnim }], alignItems: 'center' }}>
+              <View style={styles.markCrosshairPin}>
+                <MaterialIcons name="add-location-alt" size={18} color={WHITE} />
+              </View>
+              <View style={styles.markCrosshairStem} />
+            </Animated.View>
+            <View style={styles.markCrosshairDot} />
+          </View>
+        </View>
       )}
+
+      {/* Step-1 bottom card — live GPS coords + Confirm button */}
+      {markMode && (
+        <Animated.View style={[styles.markStep1Card, {
+          opacity: markCardAnim,
+          transform: [{ translateY: markCardAnim.interpolate({ inputRange: [0, 1], outputRange: [40, 0] }) }],
+        }]}>
+          <View style={styles.markStep1Top}>
+            <View style={styles.markStep1IconWrap}>
+              <MaterialIcons name="add-location-alt" size={20} color={WHITE} />
+            </View>
+            <View style={styles.markStep1TextWrap}>
+              <Text style={styles.markStep1Title}>Drop Pin</Text>
+              <Text style={styles.markStep1Hint}>Move the map to position your pin</Text>
+            </View>
+            <TouchableOpacity onPress={closeMarkMode} activeOpacity={0.7} style={styles.markStep1CloseBtn}>
+              <MaterialIcons name="close" size={18} color={GRAY} />
+            </TouchableOpacity>
+          </View>
+
+          <View style={styles.markStep1CoordsRow}>
+            <MaterialIcons name="gps-fixed" size={13} color={GRAY} />
+            <Text style={styles.markStep1Coords} numberOfLines={1}>
+              {markCenter
+                ? `${markCenter.latitude.toFixed(6)},  ${markCenter.longitude.toFixed(6)}`
+                : 'Locating…'}
+            </Text>
+          </View>
+
+          <TouchableOpacity style={styles.markStep1Btn} onPress={handleConfirmPin} activeOpacity={0.85}>
+            <Text style={styles.markStep1BtnText}>Confirm Location</Text>
+            <MaterialIcons name="arrow-forward" size={18} color={WHITE} />
+          </TouchableOpacity>
+        </Animated.View>
+      )}
+
 
       {/* ── Location acquiring overlay — shown until first GPS fix ── */}
       {locationStatus !== null && <LocationAcquiringOverlay status={locationStatus} />}
@@ -1364,15 +1251,49 @@ const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: BG },
 
 
-  // Login time widget — slim Apple-style pill, 12 px below NavPill bottom (~104 px)
-  loginWidget: {
-    position: 'absolute', top: 116, left: 16, right: 16, zIndex: 10,
-    flexDirection: 'row', alignItems: 'center', gap: 14,
-    borderRadius: 18, height: 60, paddingHorizontal: 16,
-    borderWidth: 1,
-    shadowColor: '#000', shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.08, shadowRadius: 8, elevation: 4,
+  // ── Merged top card — Nav tabs + Login widget ─────────────────────────────
+  topCard: {
+    position: 'absolute', top: 56, left: 16, right: 16, zIndex: 10,
+    borderRadius: 20, overflow: 'hidden',
+    shadowColor: '#000', shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.22, shadowRadius: 12, elevation: 8,
   },
+  topCardDivider: { height: 1 },
+  loginWidgetRow: {
+    flexDirection: 'row', alignItems: 'center', gap: 14,
+    height: 60, paddingHorizontal: 16,
+  },
+  // ── Merged bottom card ────────────────────────────────────────────────────────
+  bottomCard: {
+    position: 'absolute', bottom: 36, left: 16, right: 16,
+    backgroundColor: 'rgba(0,0,0,0.92)', borderRadius: 20,
+    shadowColor: '#000', shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.30, shadowRadius: 16, elevation: 10,
+    overflow: 'hidden',
+  },
+  exploreRow: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
+    paddingHorizontal: 16, paddingVertical: 12,
+  },
+  exploreRowLeft: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  exploreRowText: { color: WHITE, fontSize: 14, fontWeight: '700' },
+  cardDivider:    { height: 1, backgroundColor: 'rgba(255,255,255,0.12)' },
+  atRow: {
+    flexDirection: 'row', alignItems: 'center', gap: 14,
+    paddingHorizontal: 16, paddingVertical: 14,
+  },
+  atIconWrap: {
+    width: 40, height: 40, borderRadius: 12,
+    backgroundColor: 'rgba(255,255,255,0.12)', justifyContent: 'center', alignItems: 'center',
+  },
+  atBody:     { flex: 1, gap: 2 },
+  atEyebrow:  { color: 'rgba(255,255,255,0.45)', fontSize: 9, fontWeight: '800', letterSpacing: 1.4 },
+  atName:     { color: WHITE, fontSize: 15, fontWeight: '800', letterSpacing: -0.3 },
+  atMeta:     { flexDirection: 'row', alignItems: 'center', gap: 6 },
+  atCategory: { color: 'rgba(255,255,255,0.50)', fontSize: 10, fontWeight: '700', letterSpacing: 0.8 },
+  atLiveDot:  { width: 8, height: 8, borderRadius: 4, backgroundColor: '#34C759' },
+  actionsRow: { flexDirection: 'row', alignItems: 'center' },
+
   loginWidgetLabel:   { fontSize: 9, fontWeight: '700', letterSpacing: 1.4, textTransform: 'uppercase' },
   loginWidgetTime:    { fontSize: 20, fontWeight: '800', letterSpacing: -0.5, marginTop: 1 },
   loginWidgetDivider: { width: 1, height: 34 },
@@ -1384,7 +1305,7 @@ const styles = StyleSheet.create({
   },
 
   loginStatusPopup: {
-    position: 'absolute', top: 188, left: 16, zIndex: 20,
+    position: 'absolute', top: 184, left: 16, zIndex: 20,
     flexDirection: 'row', alignItems: 'center', gap: 8,
     backgroundColor: WHITE, borderRadius: 12,
     paddingHorizontal: 14, paddingVertical: 10,
@@ -1396,47 +1317,26 @@ const styles = StyleSheet.create({
   loginStatusText: { fontSize: 14, fontWeight: '800' },
   loginStatusSub:  { fontSize: 12, color: GRAY },
 
-  // You're at / Moving card — 12 px above the action row (bottom: 36 + ~54 px height + 12 = 102)
-  atCard: {
-    position: 'absolute', bottom: 102, left: 16, right: 16,
-    backgroundColor: BLACK, borderRadius: 20,
-    paddingHorizontal: 16, paddingVertical: 14,
-    shadowColor: '#000', shadowOffset: { width: 0, height: 6 },
-    shadowOpacity: 0.18, shadowRadius: 20, elevation: 12,
-  },
-  atCardRow:      { flexDirection: 'row', alignItems: 'center', gap: 14 },
-  atCardIconWrap: {
-    width: 44, height: 44, borderRadius: 14,
-    backgroundColor: 'rgba(255,255,255,0.12)',
-    justifyContent: 'center', alignItems: 'center',
-  },
-  atCardBody:     { flex: 1, gap: 2 },
-  atCardEyebrow:  { color: 'rgba(255,255,255,0.45)', fontSize: 9, fontWeight: '800', letterSpacing: 1.4 },
-  atCardName:     { color: WHITE, fontSize: 16, fontWeight: '800', letterSpacing: -0.3 },
-  atCardMeta:     { flexDirection: 'row', alignItems: 'center', gap: 6 },
-  atCardCategory: { color: 'rgba(255,255,255,0.50)', fontSize: 10, fontWeight: '700', letterSpacing: 0.8 },
-  atCardLiveDot:  { width: 8, height: 8, borderRadius: 4, backgroundColor: '#34C759' },
-  weekCluster:    { flex: 1 },
-  weekBoxRow:     { flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
-  weekDateStack:  { gap: 1 },
-  weekDateText:   { fontSize: 13, fontWeight: '700', letterSpacing: -0.2 },
-  weekNumText:    { fontSize: 11, fontWeight: '600' },
-  weekBoxes:      { flexDirection: 'row', alignItems: 'center', gap: 3 },
+  weekCluster:    { flex: 1, flexDirection: 'row', alignItems: 'center', gap: 16 },
+  weekDateStack:  { gap: 2 },
+  weekDateText:   { fontSize: 12, fontWeight: '700', letterSpacing: -0.2 },
+  weekNumText:    { fontSize: 10, fontWeight: '600' },
+  weekBoxes:      { flex: 1, flexDirection: 'row', alignItems: 'center', gap: 2, justifyContent: 'flex-end' },
   nextMonthPill: {
     height: 24, borderRadius: 5,
     justifyContent: 'center', alignItems: 'center',
   },
   nextMonthLabel: { fontSize: 8, fontWeight: '700', letterSpacing: 0.3 },
   weekBox: {
-    width: 22, height: 24, borderRadius: 5,
+    width: 20, height: 22, borderRadius: 4,
     justifyContent: 'center', alignItems: 'center',
   },
   weekBoxToday: { borderWidth: 2 },
   weekBoxLabel: { fontSize: 9, fontWeight: '800' },
 
-  // Floating map control buttons — right side, 12 px above atCard top edge (~102 + 72 + 12 = 186)
+  // Floating map control buttons — right side, above the merged bottom card
   mapControls: {
-    position: 'absolute', right: 16, bottom: 186,
+    position: 'absolute', right: 16, bottom: 210,
     gap: 10,
   },
   mapControlBtn: {
@@ -1449,22 +1349,12 @@ const styles = StyleSheet.create({
   },
   mapControlBtnActive: { backgroundColor: BLACK, borderColor: BLACK },
 
-  // Bottom action row
-  actionRow: {
-    position: 'absolute', bottom: 36, left: 16, right: 16,
-    flexDirection: 'row', alignItems: 'center',
-    backgroundColor: 'rgba(255,255,255,0.96)',
-    borderRadius: 20, borderWidth: 1, borderColor: GRAY3,
-    shadowColor: '#000', shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.08, shadowRadius: 16, elevation: 8,
-    overflow: 'hidden',
-  },
   actionBtn: {
     flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center',
-    gap: 8, paddingVertical: 17,
+    gap: 8, paddingVertical: 16,
   },
-  actionBtnText: { color: BLACK, fontSize: 13, fontWeight: '700' },
-  actionDivider: { width: 1, height: 24, backgroundColor: GRAY3 },
+  actionBtnText: { color: WHITE, fontSize: 13, fontWeight: '700' },
+  actionDivider: { width: 1, height: 24, backgroundColor: 'rgba(255,255,255,0.12)' },
 
   baseLocationPin: {
     width: 30, height: 30, borderRadius: 15,
@@ -1490,36 +1380,7 @@ const styles = StyleSheet.create({
 
   // ── Mark Location overlay ────────────────────────────────────────────────────
 
-  markStepBadge: {
-    position: 'absolute', top: 172, alignSelf: 'center',
-    flexDirection: 'row', alignItems: 'center', gap: 6,
-    backgroundColor: 'rgba(0,0,0,0.72)', borderRadius: 20,
-    paddingHorizontal: 14, paddingVertical: 6, zIndex: 20,
-  },
-  markStepText: { color: WHITE, fontSize: 10, fontWeight: '800', letterSpacing: 1.1 },
-
-  // Search bar override — pure white card with bold black stroke so it reads against any map or UI chrome
-  markSearchBar: {
-    backgroundColor: WHITE,
-    borderColor: BLACK, borderWidth: 1.5,
-    shadowOpacity: 0.22, shadowRadius: 18, elevation: 10,
-  },
-
-  // Search input inside the ribbon (no wrapper needed — sits inside loginWidget container)
-  markSearchInput: { flex: 1, fontSize: 15 },
-  // Dropdown floats just below the login widget ribbon (top 110 + ~54px ribbon height + 6px gap)
-  markResultsList: {
-    position: 'absolute', top: 170, left: 16, right: 16, zIndex: 35,
-    backgroundColor: WHITE, borderRadius: 14,
-    borderWidth: 1, borderColor: GRAY3, maxHeight: 210,
-    shadowColor: '#000', shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.12, shadowRadius: 14, elevation: 10,
-  },
-  markResultRow:   { flexDirection: 'row', alignItems: 'flex-start', gap: 10, padding: 13 },
-  markResultTitle: { color: BLACK, fontSize: 14, fontWeight: '600' },
-  markResultSub:   { color: GRAY,  fontSize: 11, marginTop: 1 },
-
-  // Crosshair pin centred on map
+  // Crosshair pin — centred in the map area above the bottom card (bottom: 220 mirrors mapPadding)
   markCrosshairWrap: {
     position: 'absolute', top: 0, left: 0, right: 0, bottom: 220,
     justifyContent: 'center', alignItems: 'center',
@@ -1536,70 +1397,40 @@ const styles = StyleSheet.create({
   markCrosshairStem: { width: 2, height: 14, backgroundColor: BLACK },
   markCrosshairDot:  { width: 6, height: 6, borderRadius: 3, backgroundColor: BLACK },
 
-  // Bottom panel
-  markPanelKAV: {
-    position: 'absolute', bottom: 0, left: 0, right: 0, zIndex: 25,
-  },
-  markPanel: {
-    backgroundColor: BLACK,
-    borderTopLeftRadius: 28, borderTopRightRadius: 28,
-    paddingHorizontal: 20, paddingTop: 8, paddingBottom: 40,
-    borderTopWidth: 1, borderColor: 'rgba(255,255,255,0.12)',
-    shadowColor: '#000', shadowOffset: { width: 0, height: -4 },
-    shadowOpacity: 0.35, shadowRadius: 16, elevation: 16,
-    gap: 14,
-  },
-  markPanelHeader: {
-    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
-    paddingTop: 4, paddingBottom: 4,
-  },
-  markBackBtn: {
-    width: 36, height: 36, borderRadius: 18,
-    backgroundColor: 'rgba(255,255,255,0.12)', justifyContent: 'center', alignItems: 'center',
-  },
-  markPanelTitle: { color: WHITE, fontSize: 16, fontWeight: '800' },
-
-  markNameInput: {
-    backgroundColor: WHITE, borderRadius: 14,
-    paddingHorizontal: 16, paddingVertical: 14,
-    color: BLACK, fontSize: 15,
-    borderWidth: 1.5, borderColor: BLACK,
+  // Close button inside the step-1 card — top right
+  markStep1CloseBtn: {
+    width: 32, height: 32, borderRadius: 16,
+    backgroundColor: CARD, justifyContent: 'center', alignItems: 'center',
+    flexShrink: 0,
   },
 
-  markSectionLabel: { color: 'rgba(255,255,255,0.45)', fontSize: 10, fontWeight: '800', letterSpacing: 1.2 },
-
-  // Category chips — 4-per-row grid
-  markCatGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
-  markCatChip: {
-    flexDirection: 'row', alignItems: 'center', gap: 6,
-    paddingHorizontal: 14, paddingVertical: 9, borderRadius: 10,
-    backgroundColor: 'rgba(255,255,255,0.08)', borderWidth: 1, borderColor: 'rgba(255,255,255,0.12)',
+  // Step-1 bottom card
+  markStep1Card: {
+    position: 'absolute', bottom: 36, left: 16, right: 16, zIndex: 20,
+    backgroundColor: WHITE, borderRadius: 24,
+    padding: 20, gap: 14,
+    borderWidth: 1, borderColor: GRAY3,
+    shadowColor: '#000', shadowOffset: { width: 0, height: 8 },
+    shadowOpacity: 0.12, shadowRadius: 24, elevation: 14,
   },
-  markCatChipActive:  { backgroundColor: WHITE, borderColor: WHITE },
-  markCatLabel:       { color: 'rgba(255,255,255,0.65)', fontSize: 13, fontWeight: '700' },
-  markCatLabelActive: { color: BLACK },
-
-  // Coordinate readout
-  markCoordRow: { flexDirection: 'row', alignItems: 'center', gap: 6 },
-  markCoordText: { color: 'rgba(255,255,255,0.45)', fontSize: 11, fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace' },
-
-  // Radius chips
-  markRadiusRow: { flexDirection: 'row', gap: 10 },
-  markRadiusChip: {
-    flex: 1, paddingVertical: 13, borderRadius: 12,
-    backgroundColor: 'rgba(255,255,255,0.08)', alignItems: 'center',
-    borderWidth: 1.5, borderColor: 'rgba(255,255,255,0.12)',
+  markStep1Top: { flexDirection: 'row', alignItems: 'center', gap: 14 },
+  markStep1IconWrap: {
+    width: 44, height: 44, borderRadius: 14,
+    backgroundColor: BLACK, justifyContent: 'center', alignItems: 'center',
   },
-  markRadiusChipActive: { backgroundColor: WHITE, borderColor: WHITE },
-  markRadiusText:       { color: 'rgba(255,255,255,0.65)', fontSize: 15, fontWeight: '700' },
-  markRadiusTextActive: { color: BLACK },
-
-  markPrimaryBtn: {
-    backgroundColor: WHITE, borderRadius: 14,
-    paddingVertical: 15, marginTop: 2,
-    flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8,
+  markStep1TextWrap: { flex: 1, gap: 2 },
+  markStep1Title: { color: BLACK, fontSize: 17, fontWeight: '800', letterSpacing: -0.3 },
+  markStep1Hint:  { color: GRAY, fontSize: 13, fontWeight: '500' },
+  markStep1CoordsRow: {
+    flexDirection: 'row', alignItems: 'center', gap: 8,
+    backgroundColor: CARD, borderRadius: 12,
+    paddingHorizontal: 14, paddingVertical: 10,
   },
-  markPrimaryBtnText: { color: BLACK, fontSize: 15, fontWeight: '800' },
-
-  savedPinIcon: { fontSize: 15 },
+  markStep1Coords: { color: GRAY, fontSize: 12, fontWeight: '600', fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace', flex: 1 },
+  markStep1Btn: {
+    backgroundColor: BLACK, borderRadius: 16,
+    paddingVertical: 16, flexDirection: 'row',
+    alignItems: 'center', justifyContent: 'center', gap: 8,
+  },
+  markStep1BtnText: { color: WHITE, fontSize: 16, fontWeight: '800', letterSpacing: -0.2 },
 });

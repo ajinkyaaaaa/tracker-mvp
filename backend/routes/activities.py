@@ -81,7 +81,7 @@ def pending_count():
     db      = get_db()
     row     = db.execute(
         "SELECT COUNT(*) as count FROM activity_logs "
-        "WHERE user_id = %s AND status = 'pending' AND triggered_at::DATE = CURRENT_DATE",
+        "WHERE user_id = %s AND status = 'pending' AND LEFT(triggered_at, 10) = TO_CHAR(CURRENT_DATE, 'YYYY-MM-DD')",
         (user_id,),
     ).fetchone()
     db.close()
@@ -100,7 +100,7 @@ def today():
         "SELECT id, latitude, longitude, description, triggered_at, "
         "dwell_duration, status, response, responded_at "
         "FROM activity_logs "
-        "WHERE user_id = %s AND triggered_at::DATE = CURRENT_DATE ORDER BY triggered_at DESC",
+        "WHERE user_id = %s AND LEFT(triggered_at, 10) = TO_CHAR(CURRENT_DATE, 'YYYY-MM-DD') ORDER BY triggered_at DESC",
         (user_id,),
     ).fetchall()
     db.close()
@@ -119,7 +119,7 @@ def history(date):
         "SELECT id, latitude, longitude, description, triggered_at, "
         "dwell_duration, status, response, responded_at "
         "FROM activity_logs "
-        "WHERE user_id = %s AND triggered_at::DATE = %s::DATE ORDER BY triggered_at DESC",
+        "WHERE user_id = %s AND LEFT(triggered_at, 10) = %s ORDER BY triggered_at DESC",
         (user_id, date),
     ).fetchall()
     db.close()

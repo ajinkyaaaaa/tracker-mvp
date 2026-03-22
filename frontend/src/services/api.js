@@ -71,19 +71,35 @@ export const api = {
   syncBulkLoginSessions:(sessions)        => request('/sync/login-sessions', { method: 'POST', body: JSON.stringify({ sessions }) }),
   getSyncStatus:        ()                => request('/sync/status'),
   getLoginHistory:      ()                => request('/sync/login-history'),
+  // getDayDetail: fallback fetch for DayLogScreen when local SQLite has no data for a synced day
+  getDayDetail:         (date)            => request(`/sync/day-detail/${date}`),
 
   // ── Admin — routes/admin.py ───────────────────────────────────────────────
-  // All consumed by AdminDashboardScreen.js
-  getEmployees:         ()              => request('/admin/employees'),
-  getLiveEmployees:     ()              => request('/admin/live'),
-  getEmployeeLocations: (userId, date) => request(`/admin/employee/${userId}/locations/${date}`),
-  getEmployeeActivities:(userId, date) => request(`/admin/employee/${userId}/activities/${date}`),
+  // getEmployees/getLiveEmployees: consumed by AdminEmployeesScreen.js, AdminLiveScreen.js
+  // getEmployeeLocations/Activities: consumed by AdminDayLogScreen.js, AdminTravelMapScreen.js
+  // getEmployeeDayLog: consumed by AdminDayLogScreen.js → loadDayData()
+  // generateReport: consumed by AdminReportsScreen.js → handleGenerateReport()
+  getEmployees:         ()                         => request('/admin/employees'),
+  getLiveEmployees:     ()                         => request('/admin/live'),
+  getEmployeeLocations: (userId, date)             => request(`/admin/employee/${userId}/locations/${date}`),
+  getEmployeeActivities:(userId, date)             => request(`/admin/employee/${userId}/activities/${date}`),
+  getEmployeeDayLog:    (userId, date)             => request(`/admin/employee/${userId}/day-log/${date}`),
+  generateReport:       (userIds, start, end)      => request(`/admin/report?user_ids=${userIds.join(',')}&start=${start}&end=${end}`),
 
   // ── Settings — routes/settings.py ────────────────────────────────────────
   // getLoginDeadline: consumed by MapScreen.js on mount → week box colour logic
   // updateLoginDeadline: consumed by AdminDashboardScreen.js → Settings tab
-  getLoginDeadline:    ()         => request('/settings/login-deadline'),
-  updateLoginDeadline: (deadline) => request('/settings/admin/login-deadline', { method: 'PUT', body: JSON.stringify({ login_deadline: deadline }) }),
+  // getLogoutTime: polled every 60 s by AuthContext.js → auto-logout enforcement
+  // updateLogoutTime: consumed by AdminDashboardScreen.js → Settings tab
+  // getTrackingIntervals: consumed by MapScreen.js → syncTrackingIntervals() for background task
+  // updateTrackingIntervals: consumed by AdminDashboardScreen.js → Settings tab
+  getLoginDeadline:          ()              => request('/settings/login-deadline'),
+  updateLoginDeadline:       (deadline)      => request('/settings/admin/login-deadline',       { method: 'PUT', body: JSON.stringify({ login_deadline: deadline }) }),
+  getLogoutTime:             ()              => request('/settings/logout-time'),
+  updateLogoutTime:          (logoutTime)    => request('/settings/admin/logout-time',          { method: 'PUT', body: JSON.stringify({ logout_time: logoutTime }) }),
+  getTrackingIntervals:      ()              => request('/settings/tracking-intervals'),
+  updateTrackingIntervals:   (active, idle)  => request('/settings/admin/tracking-intervals',   { method: 'PUT', body: JSON.stringify({ interval_active: active, interval_idle: idle }) }),
+  verifyStorageClearCode:    (code)          => request('/settings/verify-storage-clear-code',  { method: 'POST', body: JSON.stringify({ code }) }),
 
   // ── Bugs — routes/bugs.py ────────────────────────────────────────────────
   // reportBug: consumed by ReportBugScreen.js → submit handler
@@ -96,6 +112,14 @@ export const api = {
   // ── Auth extras — routes/auth.py ─────────────────────────────────────────
   // changePassword: consumed by PasswordSecurityScreen.js → save handler
   changePassword: (currentPassword, newPassword) => request('/auth/change-password', { method: 'POST', body: JSON.stringify({ currentPassword, newPassword }) }),
+
+  // ── Profile — routes/profile.py ──────────────────────────────────────────
+  // getProfile:     consumed by AuthContext.js (login/loadUser) + ManageProfileScreen.js (on mount)
+  // upsertProfile:  consumed by ManageProfileScreen.js → debounced auto-save on text field change
+  // setGeoProfiles: consumed by ManageProfileScreen.js → immediate save on any geo profile mutation
+  getProfile:     ()           => request('/profile'),
+  upsertProfile:  (data)       => request('/profile',     { method: 'PUT', body: JSON.stringify(data) }),
+  setGeoProfiles: (base, home) => request('/profile/geo', { method: 'PUT', body: JSON.stringify({ base, home }) }),
 
   // ── Saved Locations — routes/saved_locations.py ───────────────────────────
   // Consumed by MapScreen.js (mark / load pins; idle suppression uses the list too)

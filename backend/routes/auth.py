@@ -1,7 +1,7 @@
 # routes/auth.py — Authentication routes
 # Handles user registration, login, logout, and token validation.
 # All tokens are JWTs signed by JWT_SECRET_KEY (app.py).
-# Token expiry: before 18:00 local time → expires at 18:00; at/after 18:00 → expires in 5 hours.
+# Token expiry: login before logout_time → expires at logout_time; login after logout_time → 1-hour session.
 # Frontend entry point: src/services/api.js → api.login / api.register / api.logout / api.getMe
 
 from datetime import datetime, timedelta
@@ -13,12 +13,22 @@ from database import get_db   # → database.py
 auth_bp = Blueprint("auth", __name__)
 
 
-# Returns (expires_delta, expires_at_iso) based on current local time.
-# Before 18:00 → token lives until 18:00 today; at/after 18:00 → 5-hour session.
+# Returns (expires_delta, expires_at_iso) based on company logout_time (company_settings).
+# Before logout_time → token expires at logout_time today.
+# At/after logout_time (late login or overtime) → 1-hour session, then auto-logout.
 def _token_expiry():
+    conn = get_db()
+    try:
+        row = conn.execute(
+            "SELECT value FROM company_settings WHERE key = 'logout_time'"
+        ).fetchone()
+    finally:
+        conn.close()
+    logout_str   = row['value'] if row else '18:00'
+    logout_h, logout_m = map(int, logout_str.split(':'))
     now    = datetime.utcnow()
-    cutoff = now.replace(hour=18, minute=0, second=0, microsecond=0)
-    delta  = (cutoff - now) if now < cutoff else timedelta(hours=5)
+    cutoff = now.replace(hour=logout_h, minute=logout_m, second=0, microsecond=0)
+    delta  = (cutoff - now) if now < cutoff else timedelta(hours=1)
     return delta, (now + delta).isoformat() + "Z"  # Z suffix → frontend parses as UTC
 
 

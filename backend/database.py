@@ -121,6 +121,9 @@ def init_db():
         CREATE UNIQUE INDEX IF NOT EXISTS idx_login_logs_user_time_unique
             ON login_logs(user_id, login_time)
     """)
+    # Migrate: add login location columns if not already present
+    conn.execute("ALTER TABLE login_logs ADD COLUMN IF NOT EXISTS login_location_name TEXT")
+    conn.execute("ALTER TABLE login_logs ADD COLUMN IF NOT EXISTS login_location_cat  TEXT")
 
     # saved_locations: named pins marked by the employee via MapScreen.js modal
     conn.execute("""
@@ -131,6 +134,7 @@ def init_db():
             category   TEXT NOT NULL DEFAULT 'other',
             latitude   DOUBLE PRECISION NOT NULL,
             longitude  DOUBLE PRECISION NOT NULL,
+            radius     INTEGER NOT NULL DEFAULT 100,
             created_at TIMESTAMP DEFAULT NOW()
         )
     """)
@@ -138,6 +142,8 @@ def init_db():
         CREATE INDEX IF NOT EXISTS idx_saved_locations_user
             ON saved_locations(user_id)
     """)
+    conn.execute("ALTER TABLE saved_locations ADD COLUMN IF NOT EXISTS radius INTEGER NOT NULL DEFAULT 100")
+    conn.execute("ALTER TABLE saved_locations ADD COLUMN IF NOT EXISTS address TEXT")
 
     # client_visits: matched stops where employee was at a saved "client" pin
     # UNIQUE index enforces idempotency so re-syncing inserts 0 duplicate rows
@@ -175,6 +181,41 @@ def init_db():
         )
     """)
 
+    # user_profiles: per-user personal info synced from ManageProfileScreen.js → PUT /api/profile
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS user_profiles (
+            user_id    INTEGER PRIMARY KEY REFERENCES users(id),
+            first_name TEXT,
+            last_name  TEXT,
+            phone      TEXT,
+            address    TEXT,
+            state      TEXT,
+            pincode    TEXT,
+            country    TEXT DEFAULT 'India',
+            updated_at TIMESTAMP DEFAULT NOW()
+        )
+    """)
+
+    # user_geo_profiles: base/home geo pins per user; wipe-and-replace on every save
+    # Synced from ManageProfileScreen.js → PUT /api/profile/geo
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS user_geo_profiles (
+            id           SERIAL PRIMARY KEY,
+            user_id      INTEGER NOT NULL REFERENCES users(id),
+            profile_type TEXT NOT NULL CHECK(profile_type IN ('base', 'home')),
+            name         TEXT NOT NULL,
+            latitude     DOUBLE PRECISION NOT NULL,
+            longitude    DOUBLE PRECISION NOT NULL,
+            radius       INTEGER NOT NULL DEFAULT 100,
+            sort_order   INTEGER NOT NULL DEFAULT 0,
+            updated_at   TIMESTAMP DEFAULT NOW()
+        )
+    """)
+    conn.execute("""
+        CREATE INDEX IF NOT EXISTS idx_geo_profiles_user
+            ON user_geo_profiles(user_id)
+    """)
+
     # company_settings: global key-value config controlled by the admin
     conn.execute("""
         CREATE TABLE IF NOT EXISTS company_settings (
@@ -184,6 +225,10 @@ def init_db():
     """)
     conn.execute("""
         INSERT INTO company_settings (key, value) VALUES ('login_deadline', '09:00')
+        ON CONFLICT (key) DO NOTHING
+    """)
+    conn.execute("""
+        INSERT INTO company_settings (key, value) VALUES ('logout_time', '18:00')
         ON CONFLICT (key) DO NOTHING
     """)
 

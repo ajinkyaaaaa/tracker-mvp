@@ -1,11 +1,14 @@
-// settings/ManageProfileScreen.js — Edit profile picture, personal information, geo profiles
+// settings/ManageProfileScreen.js — Edit personal information and geo profiles
 // Navigated to from SettingsScreen.js → Manage Profile row
 // Receives geo profile data via AsyncStorage '_geo_pending' written by BaseLocationPinScreen
 //   (focus listener reads and clears '_geo_pending' on each return)
 //
 // Data flows:
-//   base_location_data AsyncStorage → MapScreen.js (star pin + geofence)
-//   home_location_data AsyncStorage → MapScreen.js (home pin + geofence)
+//   On mount: AsyncStorage → instant local load; then GET /api/profile → server overwrite + AsyncStorage refresh
+//   Text fields: onChangeText → debounced 1.5 s → AsyncStorage + PUT /api/profile
+//   Geo profiles: add/edit/remove → immediate AsyncStorage + PUT /api/profile/geo
+//   base_locations_data AsyncStorage → MapScreen.js (star pins + geofence circles, array)
+//   home_locations_data AsyncStorage → MapScreen.js (home pins + geofence circles, array)
 
 import { useState, useEffect, useRef }                        from 'react';
 import { View, Text, ScrollView, TouchableOpacity, TextInput,
@@ -13,14 +16,18 @@ import { View, Text, ScrollView, TouchableOpacity, TextInput,
          Platform }                                           from 'react-native';
 import MapView, { Marker, Circle, PROVIDER_GOOGLE }           from 'react-native-maps';
 import AsyncStorage                                           from '@react-native-async-storage/async-storage';
-import * as Location                                          from 'expo-location';
+import { getCurrentLocation }                                  from '../../services/locationService';
 import { MaterialIcons }                                      from '@expo/vector-icons';
 import { useAuth }                                            from '../../contexts/AuthContext';
 import { useTheme }                                           from '../../contexts/ThemeContext';
+import { api }                                               from '../../services/api';
 
-const PROFILE_KEY       = 'user_profile_info';
-const BASE_LOCATION_KEY = 'base_location_data';  // { name, icon, latitude, longitude, radius } → MapScreen.js
-const HOME_LOCATION_KEY = 'home_location_data';  // { name, icon, latitude, longitude, radius } → MapScreen.js
+const PROFILE_KEY        = 'user_profile_info';
+const BASE_LOCATIONS_KEY = 'base_locations_data';  // Array<{ name, latitude, longitude, radius }> → MapScreen.js
+const HOME_LOCATIONS_KEY = 'home_locations_data';  // Array<{ name, latitude, longitude, radius }> → MapScreen.js
+// Legacy single-item keys (read-only, for migration)
+const BASE_LEGACY_KEY    = 'base_location_data';
+const HOME_LEGACY_KEY    = 'home_location_data';
 
 const LABEL_MAX = 25;
 
@@ -127,29 +134,48 @@ export default function ManageProfileScreen({ navigation }) {
   const [pincode,      setPincode]      = useState('');
   const [country,      setCountry]      = useState('India');
 
-  // Base geo profile — icon always 'star'
-  const [baseName,   setBaseName]   = useState('');
-  const [baseCoords, setBaseCoords] = useState(null);
-  const [baseRadius, setBaseRadius] = useState(100);
+  // Geo profile arrays — each item: { name, latitude, longitude, radius }
+  const [baseLocations, setBaseLocations] = useState([]);
+  const [homeLocations, setHomeLocations] = useState([]);
 
-  // Home geo profile — icon always 'home'
-  const [homeName,   setHomeName]   = useState('');
-  const [homeCoords, setHomeCoords] = useState(null);
-  const [homeRadius, setHomeRadius] = useState(100);
+  const [locLoading, setLocLoading] = useState(null); // 'base' | 'home' | null
+  const [geoBanner,  setGeoBanner]  = useState('');   // shown after returning from pin screen
 
-  const [saving,          setSaving]          = useState(false);
-  const [locLoading,      setLocLoading]      = useState(null); // 'base' | 'home' | null
-  const [geoBanner,       setGeoBanner]       = useState('');   // shown after returning from pin screen
+  const saveDebounceRef = useRef(null);
 
-  // Load all stored data on mount
+  // Writes personal info to AsyncStorage then syncs to server (best-effort).
+  // Called by the debounce timer — fires 1.5 s after the last keystroke.
+  async function autoSavePersonalInfo(fields) {
+    await AsyncStorage.setItem(PROFILE_KEY, JSON.stringify(fields));
+    try { await api.upsertProfile(fields); } catch {}  // PUT /api/profile
+  }
+
+  // Debounces personal info saves: starts a 1.5 s timer on each keystroke.
+  function debouncedPersonalSave(fields) {
+    if (saveDebounceRef.current) clearTimeout(saveDebounceRef.current);
+    saveDebounceRef.current = setTimeout(() => autoSavePersonalInfo(fields), 1500);
+  }
+
+  // Writes geo arrays to AsyncStorage then syncs to server (best-effort).
+  // Called immediately after any geo profile mutation (add, edit, remove).
+  async function saveGeoProfiles(newBase, newHome) {
+    await AsyncStorage.setItem(BASE_LOCATIONS_KEY, JSON.stringify(newBase));
+    await AsyncStorage.setItem(HOME_LOCATIONS_KEY, JSON.stringify(newHome));
+    try { await api.setGeoProfiles(newBase, newHome); } catch {}  // PUT /api/profile/geo
+  }
+
+  // Load all stored data on mount: AsyncStorage first (instant), then server (authoritative).
+  // Sequential async so legacy migration writes to new key before deleting the old one.
   useEffect(() => {
-    const parts      = (user?.name || '').split(' ');
-    const savedFirst = parts[0] || '';
-    const savedLast  = parts.slice(1).join(' ') || '';
+    const nameParts  = (user?.name || '').split(' ');
+    const savedFirst = nameParts[0] || '';
+    const savedLast  = nameParts.slice(1).join(' ') || '';
 
-    AsyncStorage.getItem(PROFILE_KEY).then(raw => {
-      if (raw) {
-        const d = JSON.parse(raw);
+    async function init() {
+      // Step 1: local AsyncStorage (instant render)
+      const profileRaw = await AsyncStorage.getItem(PROFILE_KEY);
+      if (profileRaw) {
+        const d = JSON.parse(profileRaw);
         setFirstName(d.firstName ?? savedFirst);
         setLastName(d.lastName   ?? savedLast);
         setAddress(d.address     ?? '');
@@ -161,112 +187,150 @@ export default function ManageProfileScreen({ navigation }) {
         setFirstName(savedFirst);
         setLastName(savedLast);
       }
-    });
 
-    AsyncStorage.getItem(BASE_LOCATION_KEY).then(raw => {
-      if (!raw) return;
-      const d = JSON.parse(raw);
-      setBaseName(d.name ?? '');
-      setBaseRadius(d.radius ?? 100);
-      if (d.latitude && d.longitude)
-        setBaseCoords({ latitude: d.latitude, longitude: d.longitude });
-    });
+      // Geo profiles — read all four keys, migrate legacy → new key, then delete legacy
+      const [baseArr, baseLeg, homeArr, homeLeg] = await Promise.all([
+        AsyncStorage.getItem(BASE_LOCATIONS_KEY),
+        AsyncStorage.getItem(BASE_LEGACY_KEY),
+        AsyncStorage.getItem(HOME_LOCATIONS_KEY),
+        AsyncStorage.getItem(HOME_LEGACY_KEY),
+      ]);
 
-    AsyncStorage.getItem(HOME_LOCATION_KEY).then(raw => {
-      if (!raw) return;
-      const d = JSON.parse(raw);
-      setHomeName(d.name ?? '');
-      setHomeRadius(d.radius ?? 100);
-      if (d.latitude && d.longitude)
-        setHomeCoords({ latitude: d.latitude, longitude: d.longitude });
-    });
+      const bases = baseArr ? JSON.parse(baseArr) : baseLeg ? [JSON.parse(baseLeg)] : [];
+      const homes = homeArr ? JSON.parse(homeArr) : homeLeg ? [JSON.parse(homeLeg)] : [];
+
+      setBaseLocations(bases);
+      setHomeLocations(homes);
+
+      // Write migrated data to new keys before deleting legacy
+      if (!baseArr && baseLeg) await AsyncStorage.setItem(BASE_LOCATIONS_KEY, JSON.stringify(bases));
+      if (!homeArr && homeLeg) await AsyncStorage.setItem(HOME_LOCATIONS_KEY, JSON.stringify(homes));
+      await AsyncStorage.multiRemove([BASE_LEGACY_KEY, HOME_LEGACY_KEY]);
+
+      // Step 2: Fetch from server — overwrites local if server has data.
+      // If server is empty but local has data, uploads local → server (migrates pre-sync installs).
+      try {
+        const { personal_info, geo_profiles } = await api.getProfile();  // GET /api/profile
+
+        if (personal_info?.first_name !== undefined) {
+          const fi = personal_info.first_name ?? savedFirst;
+          const la = personal_info.last_name  ?? savedLast;
+          const ph = personal_info.phone      ?? '';
+          const ad = personal_info.address    ?? '';
+          const st = personal_info.state      ?? '';
+          const pc = personal_info.pincode    ?? '';
+          const co = personal_info.country    ?? 'India';
+          setFirstName(fi); setLastName(la); setAddress(ad);
+          setPhone(ph); setState(st); setPincode(pc); setCountry(co);
+          AsyncStorage.setItem(PROFILE_KEY, JSON.stringify({
+            firstName: fi, lastName: la, phone: ph, address: ad, state: st, pincode: pc, country: co,
+          }));
+        } else {
+          // Server has no personal info — upload whatever is stored locally
+          const raw = await AsyncStorage.getItem(PROFILE_KEY);
+          if (raw) {
+            const d = JSON.parse(raw);
+            api.upsertProfile({
+              first_name: d.firstName, last_name: d.lastName, phone: d.phone,
+              address: d.address, state: d.state, pincode: d.pincode, country: d.country,
+            }).catch(() => {});
+          }
+        }
+
+        if (geo_profiles?.base?.length || geo_profiles?.home?.length) {
+          if (geo_profiles.base?.length) {
+            setBaseLocations(geo_profiles.base);
+            AsyncStorage.setItem(BASE_LOCATIONS_KEY, JSON.stringify(geo_profiles.base));
+          }
+          if (geo_profiles.home?.length) {
+            setHomeLocations(geo_profiles.home);
+            AsyncStorage.setItem(HOME_LOCATIONS_KEY, JSON.stringify(geo_profiles.home));
+          }
+        } else {
+          // Server has no geo profiles — upload local data to server
+          const [baseRaw, homeRaw] = await Promise.all([
+            AsyncStorage.getItem(BASE_LOCATIONS_KEY),
+            AsyncStorage.getItem(HOME_LOCATIONS_KEY),
+          ]);
+          const localBase = baseRaw ? JSON.parse(baseRaw) : [];
+          const localHome = homeRaw ? JSON.parse(homeRaw) : [];
+          if (localBase.length || localHome.length) {
+            api.setGeoProfiles(localBase, localHome).catch(() => {});
+          }
+        }
+      } catch {}
+    }
+    init();
   }, []);
 
-  // Reads '_geo_pending' written by BaseLocationPinScreen after user confirms a pin
-  // Uses focus listener so it fires every time this screen regains focus
+  // Reads '_geo_pending' written by BaseLocationPinScreen after user confirms a pin.
+  // Uses focus listener so it fires every time this screen regains focus.
+  // Immediately saves updated geo arrays to AsyncStorage + server.
   useEffect(() => {
     const unsubscribe = navigation.addListener('focus', async () => {
       const raw = await AsyncStorage.getItem('_geo_pending');
       if (!raw) return;
       await AsyncStorage.removeItem('_geo_pending');
-      const { pickedCoords, pickedRadius, locationType } = JSON.parse(raw);
-      if (locationType === 'base') {
-        setBaseCoords(pickedCoords);
-        setBaseRadius(pickedRadius ?? 100);
-        setBaseName(prev => prev.trim() || 'Base Location');
-      } else if (locationType === 'home') {
-        setHomeCoords(pickedCoords);
-        setHomeRadius(pickedRadius ?? 100);
-        setHomeName(prev => prev.trim() || 'Home');
-      }
-      setGeoBanner('Geo profile registered — tap Save Changes to confirm.');
+      const { pickedCoords, pickedRadius, locationType, locationIndex = -1 } = JSON.parse(raw);
+      const update = (prev, defaultName) => {
+        const arr = [...prev];
+        if (locationIndex === -1) {
+          arr.push({ name: `${defaultName} ${arr.length + 1}`, latitude: pickedCoords.latitude, longitude: pickedCoords.longitude, radius: pickedRadius ?? 100 });
+        } else {
+          arr[locationIndex] = { ...arr[locationIndex], latitude: pickedCoords.latitude, longitude: pickedCoords.longitude, radius: pickedRadius ?? 100 };
+        }
+        return arr;
+      };
+
+      // Compute updated arrays before calling setters (state values are stale inside closure)
+      setBaseLocations(prev => {
+        const newBase = locationType === 'base' ? update(prev, 'Base Location') : prev;
+        setHomeLocations(prevHome => {
+          const newHome = locationType === 'home' ? update(prevHome, 'Home') : prevHome;
+          saveGeoProfiles(newBase, newHome);
+          return newHome;
+        });
+        return newBase;
+      });
+      setGeoBanner('Geo profile registered.');
     });
     return unsubscribe;
   }, [navigation]);
 
-  // Gets GPS then navigates to BaseLocationPinScreen for the given type
-  async function handleAddGeoProfile(type) {
+  // Gets GPS (if needed) then navigates to BaseLocationPinScreen for add (index=-1) or edit (index≥0)
+  async function handleAddGeoProfile(type, index = -1) {
     setLocLoading(type);
     try {
-      const { status } = await Location.requestForegroundPermissionsAsync();
-      if (status !== 'granted') {
-        Alert.alert('Permission denied', 'Location access is required.');
-        return;
+      const locations   = type === 'base' ? baseLocations : homeLocations;
+      const existing    = index >= 0 ? locations[index] : null;
+      const defaultName = type === 'base' ? 'Base Location' : 'Home';
+      const label       = existing?.name || `${defaultName} ${locations.length + 1}`;
+      let initialCoord  = existing ? { latitude: existing.latitude, longitude: existing.longitude } : null;
+
+      if (!initialCoord) {
+        const loc = await getCurrentLocation();
+        if (!loc) { Alert.alert('Error', 'Could not get current location. Try again.'); return; }
+        initialCoord = { latitude: loc.coords.latitude, longitude: loc.coords.longitude };
       }
-      const loc = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.High });
-      const existingCoord = type === 'base' ? baseCoords : homeCoords;
-      const existingRadius = type === 'base' ? baseRadius : homeRadius;
-      const label = (type === 'base' ? baseName : homeName).trim() ||
-                    (type === 'base' ? 'Base Location' : 'Home');
+
       navigation.navigate('BaseLocationPin', {
-        initialCoord:  existingCoord ?? { latitude: loc.coords.latitude, longitude: loc.coords.longitude },
+        initialCoord,
         label,
         locationType:  type,
-        initialRadius: existingRadius,
+        initialRadius: existing?.radius ?? 100,
+        locationIndex: index,
       });
-    } catch {
-      Alert.alert('Error', 'Could not get current location. Try again.');
-    } finally {
+    } catch {} finally {
       setLocLoading(null);
     }
   }
 
-  async function handleSave() {
-    if (!firstName.trim()) { Alert.alert('Missing field', 'First name is required.'); return; }
-    setSaving(true);
-    try {
-      await AsyncStorage.setItem(PROFILE_KEY, JSON.stringify({
-        firstName, lastName, address, phone, state, pincode, country,
-      }));
-
-      if (baseCoords) {
-        await AsyncStorage.setItem(BASE_LOCATION_KEY, JSON.stringify({
-          name: baseName || 'Base Location', icon: 'star',
-          radius: baseRadius, latitude: baseCoords.latitude, longitude: baseCoords.longitude,
-        }));
-      } else {
-        await AsyncStorage.removeItem(BASE_LOCATION_KEY);
-      }
-
-      if (homeCoords) {
-        await AsyncStorage.setItem(HOME_LOCATION_KEY, JSON.stringify({
-          name: homeName || 'Home', icon: 'home',
-          radius: homeRadius, latitude: homeCoords.latitude, longitude: homeCoords.longitude,
-        }));
-      } else {
-        await AsyncStorage.removeItem(HOME_LOCATION_KEY);
-      }
-
-      setGeoBanner('');
-      Alert.alert('Saved', 'Profile updated successfully.');
-    } catch {
-      Alert.alert('Error', 'Could not save profile.');
-    } finally {
-      setSaving(false);
-    }
-  }
-
   const initials = `${firstName[0] || ''}${lastName[0] || ''}`.toUpperCase() || 'U';
+
+  // Helper: builds a complete fields object from current state + one overridden value
+  function personalFields(overrides) {
+    return { firstName, lastName, address, phone, state, pincode, country, ...overrides };
+  }
 
   return (
     <SafeAreaView style={styles.safe}>
@@ -297,79 +361,121 @@ export default function ManageProfileScreen({ navigation }) {
             <Text style={styles.avatarHint}>Tap the camera to change photo</Text>
           </View>
 
-          {/* Personal information */}
+          {/* Personal information — each field auto-saves 1.5 s after the last keystroke */}
           <Text style={styles.sectionHeader}>PERSONAL INFORMATION</Text>
           <View style={styles.sectionCard}>
-            <Field label="First Name"   value={firstName} onChangeText={setFirstName} />
+            <Field label="First Name"   value={firstName} onChangeText={v => { setFirstName(v);  debouncedPersonalSave(personalFields({ firstName: v }));  }} />
             <View style={styles.divider} />
-            <Field label="Last Name"    value={lastName}  onChangeText={setLastName} />
+            <Field label="Last Name"    value={lastName}  onChangeText={v => { setLastName(v);   debouncedPersonalSave(personalFields({ lastName: v }));   }} />
             <View style={styles.divider} />
-            <Field label="Phone Number" value={phone}     onChangeText={setPhone} keyboardType="phone-pad" />
+            <Field label="Phone Number" value={phone}     onChangeText={v => { setPhone(v);      debouncedPersonalSave(personalFields({ phone: v }));      }} keyboardType="phone-pad" />
             <View style={styles.divider} />
-            <Field label="Address"      value={address}   onChangeText={setAddress} />
+            <Field label="Address"      value={address}   onChangeText={v => { setAddress(v);    debouncedPersonalSave(personalFields({ address: v }));    }} />
             <View style={styles.divider} />
-            <Field label="State"        value={state}     onChangeText={setState} />
+            <Field label="State"        value={state}     onChangeText={v => { setState(v);      debouncedPersonalSave(personalFields({ state: v }));      }} />
             <View style={styles.divider} />
-            <Field label="Pincode"      value={pincode}   onChangeText={setPincode} keyboardType="numeric" />
+            <Field label="Pincode"      value={pincode}   onChangeText={v => { setPincode(v);    debouncedPersonalSave(personalFields({ pincode: v }));    }} keyboardType="numeric" />
             <View style={styles.divider} />
-            <Field label="Country"      value={country}   onChangeText={setCountry} />
+            <Field label="Country"      value={country}   onChangeText={v => { setCountry(v);    debouncedPersonalSave(personalFields({ country: v }));    }} />
           </View>
 
-          {/* Base geo profile */}
-          <Text style={styles.sectionHeader}>BASE GEO PROFILE</Text>
-          <View style={styles.sectionCard}>
-            <LabelField value={baseName} onChangeText={setBaseName} />
-            {baseCoords && (
-              <>
-                <View style={styles.divider} />
-                <GeoProfileCard
-                  coord={baseCoords} radius={baseRadius}
-                  icon="star" name={baseName || 'Base Location'}
+          {/* Base geo profiles — multiple supported */}
+          <Text style={styles.sectionHeader}>BASE GEO PROFILES</Text>
+          {baseLocations.map((loc, i) => (
+            <View key={`base-${i}`} style={[styles.sectionCard, { marginBottom: 12 }]}>
+              <View style={styles.geoItemHeader}>
+                <MaterialIcons name="star" size={14} color={GRAY} />
+                <Text style={styles.geoItemIndex}>Base {i + 1}</Text>
+              </View>
+              <View style={styles.divider} />
+              <View style={styles.field}>
+                <Text style={styles.fieldLabel}>Label</Text>
+                <TextInput
+                  style={styles.fieldInput}
+                  value={loc.name}
+                  onChangeText={t => {
+                    const newBase = baseLocations.map((b, idx) => idx === i ? { ...b, name: t } : b);
+                    setBaseLocations(newBase);
+                    saveGeoProfiles(newBase, homeLocations);
+                  }}
+                  placeholder="e.g. Main Office…"
+                  placeholderTextColor={GRAY2}
+                  maxLength={25}
                 />
-              </>
-            )}
-            <View style={styles.divider} />
-            <TouchableOpacity
-              style={styles.geoProfileBtn}
-              onPress={() => handleAddGeoProfile('base')}
-              activeOpacity={0.7}
-              disabled={locLoading !== null}
-            >
-              <MaterialIcons name="star" size={16} color={BLACK} />
-              <Text style={styles.geoProfileBtnText}>
-                {locLoading === 'base' ? 'Getting location…'
-                  : baseCoords ? 'Edit Base Geo Profile' : 'Add Base Geo Profile'}
-              </Text>
-            </TouchableOpacity>
-          </View>
+              </View>
+              <View style={styles.divider} />
+              <GeoProfileCard coord={{ latitude: loc.latitude, longitude: loc.longitude }} radius={loc.radius} icon="star" name={loc.name || `Base ${i + 1}`} />
+              <View style={styles.divider} />
+              <View style={styles.geoItemActions}>
+                <TouchableOpacity style={styles.geoActionBtn} onPress={() => handleAddGeoProfile('base', i)} disabled={locLoading !== null} activeOpacity={0.7}>
+                  <MaterialIcons name="edit" size={15} color={BLACK} />
+                  <Text style={styles.geoActionBtnText}>Edit Pin</Text>
+                </TouchableOpacity>
+                <TouchableOpacity style={[styles.geoActionBtn, styles.geoActionRemove]}
+                  onPress={() => {
+                    const newBase = baseLocations.filter((_, idx) => idx !== i);
+                    setBaseLocations(newBase);
+                    saveGeoProfiles(newBase, homeLocations);
+                  }} activeOpacity={0.7}>
+                  <MaterialIcons name="delete-outline" size={15} color="#FF3B30" />
+                  <Text style={[styles.geoActionBtnText, { color: '#FF3B30' }]}>Remove</Text>
+                </TouchableOpacity>
+              </View>
+            </View>
+          ))}
+          <TouchableOpacity style={[styles.sectionCard, styles.geoAddBtn]} onPress={() => handleAddGeoProfile('base', -1)} disabled={locLoading !== null} activeOpacity={0.7}>
+            <MaterialIcons name="add" size={18} color={BLACK} />
+            <Text style={styles.geoProfileBtnText}>{locLoading === 'base' ? 'Getting location…' : 'Add Base Location'}</Text>
+          </TouchableOpacity>
 
-          {/* Home geo profile */}
-          <Text style={styles.sectionHeader}>HOME GEO PROFILE</Text>
-          <View style={styles.sectionCard}>
-            <LabelField value={homeName} onChangeText={setHomeName} />
-            {homeCoords && (
-              <>
-                <View style={styles.divider} />
-                <GeoProfileCard
-                  coord={homeCoords} radius={homeRadius}
-                  icon="home" name={homeName || 'Home'}
+          {/* Home geo profiles — multiple supported */}
+          <Text style={[styles.sectionHeader, { marginTop: 20 }]}>HOME GEO PROFILES</Text>
+          {homeLocations.map((loc, i) => (
+            <View key={`home-${i}`} style={[styles.sectionCard, { marginBottom: 12 }]}>
+              <View style={styles.geoItemHeader}>
+                <MaterialIcons name="home" size={14} color={GRAY} />
+                <Text style={styles.geoItemIndex}>Home {i + 1}</Text>
+              </View>
+              <View style={styles.divider} />
+              <View style={styles.field}>
+                <Text style={styles.fieldLabel}>Label</Text>
+                <TextInput
+                  style={styles.fieldInput}
+                  value={loc.name}
+                  onChangeText={t => {
+                    const newHome = homeLocations.map((h, idx) => idx === i ? { ...h, name: t } : h);
+                    setHomeLocations(newHome);
+                    saveGeoProfiles(baseLocations, newHome);
+                  }}
+                  placeholder="e.g. Home…"
+                  placeholderTextColor={GRAY2}
+                  maxLength={25}
                 />
-              </>
-            )}
-            <View style={styles.divider} />
-            <TouchableOpacity
-              style={styles.geoProfileBtn}
-              onPress={() => handleAddGeoProfile('home')}
-              activeOpacity={0.7}
-              disabled={locLoading !== null}
-            >
-              <MaterialIcons name="home" size={16} color={BLACK} />
-              <Text style={styles.geoProfileBtnText}>
-                {locLoading === 'home' ? 'Getting location…'
-                  : homeCoords ? 'Edit Home Geo Profile' : 'Add Home Geo Profile'}
-              </Text>
-            </TouchableOpacity>
-          </View>
+              </View>
+              <View style={styles.divider} />
+              <GeoProfileCard coord={{ latitude: loc.latitude, longitude: loc.longitude }} radius={loc.radius} icon="home" name={loc.name || `Home ${i + 1}`} />
+              <View style={styles.divider} />
+              <View style={styles.geoItemActions}>
+                <TouchableOpacity style={styles.geoActionBtn} onPress={() => handleAddGeoProfile('home', i)} disabled={locLoading !== null} activeOpacity={0.7}>
+                  <MaterialIcons name="edit" size={15} color={BLACK} />
+                  <Text style={styles.geoActionBtnText}>Edit Pin</Text>
+                </TouchableOpacity>
+                <TouchableOpacity style={[styles.geoActionBtn, styles.geoActionRemove]}
+                  onPress={() => {
+                    const newHome = homeLocations.filter((_, idx) => idx !== i);
+                    setHomeLocations(newHome);
+                    saveGeoProfiles(baseLocations, newHome);
+                  }} activeOpacity={0.7}>
+                  <MaterialIcons name="delete-outline" size={15} color="#FF3B30" />
+                  <Text style={[styles.geoActionBtnText, { color: '#FF3B30' }]}>Remove</Text>
+                </TouchableOpacity>
+              </View>
+            </View>
+          ))}
+          <TouchableOpacity style={[styles.sectionCard, styles.geoAddBtn]} onPress={() => handleAddGeoProfile('home', -1)} disabled={locLoading !== null} activeOpacity={0.7}>
+            <MaterialIcons name="add" size={18} color={BLACK} />
+            <Text style={styles.geoProfileBtnText}>{locLoading === 'home' ? 'Getting location…' : 'Add Home Location'}</Text>
+          </TouchableOpacity>
 
           {!!geoBanner && (
             <View style={styles.geoBanner}>
@@ -378,9 +484,7 @@ export default function ManageProfileScreen({ navigation }) {
             </View>
           )}
 
-          <TouchableOpacity style={styles.saveBtn} onPress={handleSave} activeOpacity={0.8} disabled={saving}>
-            <Text style={styles.saveBtnText}>{saving ? 'Saving…' : 'Save Changes'}</Text>
-          </TouchableOpacity>
+          <View style={{ height: 16 }} />
 
         </ScrollView>
       </KeyboardAvoidingView>
@@ -456,6 +560,24 @@ function makeStyles({ BG, CARD, BLACK, GRAY, GRAY2, GRAY3, WHITE }) { return Sty
   },
   geoProfileBtnText: { color: BLACK, fontSize: 14, fontWeight: '600' },
 
+  geoItemHeader: { flexDirection: 'row', alignItems: 'center', gap: 6, paddingVertical: 10, paddingHorizontal: 16 },
+  geoItemIndex:  { color: GRAY, fontSize: 11, fontWeight: '700', letterSpacing: 0.8 },
+  geoItemActions: {
+    flexDirection: 'row', paddingHorizontal: 16, paddingVertical: 10, gap: 10,
+  },
+  geoActionBtn: {
+    flexDirection: 'row', alignItems: 'center', gap: 5,
+    paddingVertical: 8, paddingHorizontal: 14,
+    backgroundColor: CARD, borderRadius: 10,
+    borderWidth: 1, borderColor: GRAY3,
+  },
+  geoActionRemove: { marginLeft: 'auto' },
+  geoActionBtnText: { color: BLACK, fontSize: 13, fontWeight: '600' },
+  geoAddBtn: {
+    flexDirection: 'row', alignItems: 'center', gap: 8,
+    paddingVertical: 14, paddingHorizontal: 16, marginBottom: 0,
+  },
+
   geoBanner: {
     flexDirection: 'row', alignItems: 'center', gap: 8,
     backgroundColor: CARD, borderRadius: 12,
@@ -463,7 +585,4 @@ function makeStyles({ BG, CARD, BLACK, GRAY, GRAY2, GRAY3, WHITE }) { return Sty
     borderWidth: 1, borderColor: GRAY3,
   },
   geoBannerText: { color: BLACK, fontSize: 13, fontWeight: '600', flex: 1 },
-
-  saveBtn:     { backgroundColor: BLACK, borderRadius: 14, paddingVertical: 16, alignItems: 'center' },
-  saveBtnText: { color: WHITE, fontSize: 16, fontWeight: '700' },
 }); }
