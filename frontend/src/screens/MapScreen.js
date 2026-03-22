@@ -26,6 +26,7 @@ import {
 import MapView, { Marker, Circle, PROVIDER_GOOGLE } from 'react-native-maps';
 import * as Notifications from 'expo-notifications';
 import { MaterialIcons } from '@expo/vector-icons';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useAuth } from '../contexts/AuthContext';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { api }            from '../services/api';
@@ -247,6 +248,7 @@ function ScalePress({ onPress, style, children }) {
 }
 
 export default function MapScreen({ navigation }) {
+  const insets = useSafeAreaInsets();
   const { user, loginTime, logout } = useAuth();
   const [path,             setPath]             = useState([]);
   const [region,           setRegion]           = useState(null);
@@ -912,8 +914,8 @@ export default function MapScreen({ navigation }) {
         showsUserLocation={false}
         showsMyLocationButton={false}
         mapPadding={markMode
-          ? { top: 0, bottom: 220, left: 0, right: 0 }
-          : { top: 185, right: 0, bottom: 160, left: 0 }
+          ? { top: 0, bottom: 220 + insets.bottom, left: 0, right: 0 }
+          : { top: 185, right: 0, bottom: 160 + insets.bottom, left: 0 }
         }
         onRegionChange={r => {
           if (markMode) setMarkCenter({ latitude: r.latitude, longitude: r.longitude });
@@ -1095,7 +1097,7 @@ export default function MapScreen({ navigation }) {
 
       {/* ── Merged bottom card — Explore / You're at / Actions ── */}
       {!markMode && (
-        <Animated.View style={[styles.bottomCard, { opacity: navAnim }]} pointerEvents="box-none">
+        <Animated.View style={[styles.bottomCard, { bottom: 36 + insets.bottom, opacity: navAnim }]} pointerEvents="box-none">
 
           {/* Row 1: Explore locations */}
           <TouchableOpacity style={styles.exploreRow} onPress={() => navigation.navigate('ExploreLocations')} activeOpacity={0.75}>
@@ -1167,7 +1169,7 @@ export default function MapScreen({ navigation }) {
 
       {/* ── Map controls — hidden while mark mode is active ── */}
       {!markMode && (
-        <Animated.View style={[styles.mapControls, { opacity: navAnim }]}>
+        <Animated.View style={[styles.mapControls, { bottom: 240 + insets.bottom, opacity: navAnim }]}>
           <ScalePress style={styles.mapControlBtn} onPress={recenterMap}>
             <MaterialIcons name="my-location" size={22} color={BLACK} />
           </ScalePress>
@@ -1207,6 +1209,7 @@ export default function MapScreen({ navigation }) {
       {/* Step-1 bottom card — live GPS coords + Confirm button */}
       {markMode && (
         <Animated.View style={[styles.markStep1Card, {
+          bottom: 36 + insets.bottom,
           opacity: markCardAnim,
           transform: [{ translateY: markCardAnim.interpolate({ inputRange: [0, 1], outputRange: [40, 0] }) }],
         }]}>
@@ -1260,12 +1263,12 @@ const styles = StyleSheet.create({
   },
   topCardDivider: { height: 1 },
   loginWidgetRow: {
-    flexDirection: 'row', alignItems: 'center', gap: 14,
+    flexDirection: 'row', alignItems: 'center', gap: 10,
     height: 60, paddingHorizontal: 16,
   },
   // ── Merged bottom card ────────────────────────────────────────────────────────
   bottomCard: {
-    position: 'absolute', bottom: 36, left: 16, right: 16,
+    position: 'absolute', left: 16, right: 16,
     backgroundColor: 'rgba(0,0,0,0.92)', borderRadius: 20,
     shadowColor: '#000', shadowOffset: { width: 0, height: 4 },
     shadowOpacity: 0.30, shadowRadius: 16, elevation: 10,
@@ -1317,18 +1320,18 @@ const styles = StyleSheet.create({
   loginStatusText: { fontSize: 14, fontWeight: '800' },
   loginStatusSub:  { fontSize: 12, color: GRAY },
 
-  weekCluster:    { flex: 1, flexDirection: 'row', alignItems: 'center', gap: 16 },
-  weekDateStack:  { gap: 2 },
+  weekCluster:    { flex: 1, flexDirection: 'row', alignItems: 'center', gap: 6 },
+  weekDateStack:  { gap: 2, flexShrink: 0 },
   weekDateText:   { fontSize: 12, fontWeight: '700', letterSpacing: -0.2 },
   weekNumText:    { fontSize: 10, fontWeight: '600' },
-  weekBoxes:      { flex: 1, flexDirection: 'row', alignItems: 'center', gap: 2, justifyContent: 'flex-end' },
+  weekBoxes:      { flex: 1, flexDirection: 'row', alignItems: 'center', gap: 1, justifyContent: 'flex-end' },
   nextMonthPill: {
     height: 24, borderRadius: 5,
     justifyContent: 'center', alignItems: 'center',
   },
   nextMonthLabel: { fontSize: 8, fontWeight: '700', letterSpacing: 0.3 },
   weekBox: {
-    width: 20, height: 22, borderRadius: 4,
+    width: 18, height: 20, borderRadius: 4,
     justifyContent: 'center', alignItems: 'center',
   },
   weekBoxToday: { borderWidth: 2 },
@@ -1336,7 +1339,7 @@ const styles = StyleSheet.create({
 
   // Floating map control buttons — right side, above the merged bottom card
   mapControls: {
-    position: 'absolute', right: 16, bottom: 210,
+    position: 'absolute', right: 16,
     gap: 10,
   },
   mapControlBtn: {
@@ -1406,7 +1409,7 @@ const styles = StyleSheet.create({
 
   // Step-1 bottom card
   markStep1Card: {
-    position: 'absolute', bottom: 36, left: 16, right: 16, zIndex: 20,
+    position: 'absolute', left: 16, right: 16, zIndex: 20,
     backgroundColor: WHITE, borderRadius: 24,
     padding: 20, gap: 14,
     borderWidth: 1, borderColor: GRAY3,
