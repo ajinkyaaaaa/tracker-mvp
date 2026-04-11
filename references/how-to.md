@@ -1,5 +1,11 @@
 # Expo / EAS — Build & Distribution Guide
 
+Everything is on the preview branch on eas for the released app.
+Push new updates: eas update --channel preview --message "<commit message>"
+
+For backend: Railway (just git push)
+For frontend: EAS update (expo)
+
 ---
 
 ## Env Variable Setup
